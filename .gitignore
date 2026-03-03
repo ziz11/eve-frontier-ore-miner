@@ -1,0 +1,9 @@
+# OS/editor
+.DS_Store
+
+# Local runtime config and secrets
+secrets.ini
+config.local.ini
+
+# Optional: ignore local tuned config; commit config.ini.example instead
+config.ini
