@@ -501,12 +501,16 @@ def detect_target_slots(
     if not candidates:
         return []
 
+    row_y: Optional[int] = None
     if len(candidates) > 1:
         ys = np.array([int(c[1]) for c in candidates], dtype=np.int32)
         median_y = int(np.median(ys))
+        row_y = median_y
         candidates = [c for c in candidates if abs(int(c[1]) - median_y) < horizontal_threshold]
         if not candidates:
             return []
+    else:
+        row_y = int(candidates[0][1])
 
     # Keep larger circles first, then remove near-duplicates.
     candidates.sort(key=lambda t: t[2], reverse=True)
@@ -522,6 +526,9 @@ def detect_target_slots(
                 break
         if keep:
             deduped.append((int(cx), int(cy)))
+
+    if row_y is not None and deduped:
+        deduped = [(int(x), int(row_y)) for x, _ in deduped]
 
     deduped.sort(key=lambda p: p[0])
     return [clamp_point(p, w, h) for p in deduped[: max(0, int(max_slots))]]

@@ -47,9 +47,9 @@ python eve_inventory_calibrate/eve_inventory_calibrate.py --image "screenshot.jp
    - `[layout] storage_row_index`
    - `[layout] ore_slot_indices`
    - `[general] target_slot_order=rtl`
-   - `[lists] target_slots`
    - `[lists] laser_check_points`
    - `[lists] active_laser_slots`
+   - `[lists] target_slots` (manual fallback if calibrator could not detect `layout_target_slots`)
 6. Run `script.ahk`.
 
 ## Hotkeys (actual from `miner.ahk`)
@@ -66,7 +66,6 @@ Set `layout.layout_enabled=0` in `config.ini`, then fill inventory coordinates m
 - `[lists] ore_slots` (source drag points in ore grid)
 
 Also still required manually (Python does not provide these):
-- `[lists] target_slots`
 - `[lists] laser_check_points`
 - `[lists] active_laser_slots`
 - `[lists] asteroid_points` (used by `AUTO` lock flow)
@@ -82,11 +81,11 @@ These offsets/tuners are from `config.ini` and affect runtime behavior:
 - `[timers] laser_*`
 - `[timers] unload_*`
 
-## Python Scope (What It Does Not Mark Up)
-Python script calibrates only inventory-related layout (`ship row`, `storage rows`, `ore ROI`, `ore slots`).
-It does not auto-mark and does not auto-tune:
+## Python Scope
+Python script calibrates inventory layout (`ship row`, `storage rows`, `ore ROI`, `ore slots`)
+and target-lock layout (`target region`, `target slots` in top-right panel).
+It still does not auto-mark and does not auto-tune:
 - asteroid lock points
-- target slot points in top-right panel
 - laser check points / active laser slot mapping
 - combat/target colors like active orange lock state
 

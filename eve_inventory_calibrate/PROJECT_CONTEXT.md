@@ -14,7 +14,9 @@ Python produces `layout.json` and `config.layout.ini` with coordinates and offse
 - ship row click point,
 - storage rows,
 - ore ROI,
-- ore slot points.
+- ore slot points,
+- target-lock slots in top-right HUD,
+- target region bounds.
 
 ### Key Requirement
 - Ore may be absent in inventory.
@@ -30,9 +32,10 @@ Python produces `layout.json` and `config.layout.ini` with coordinates and offse
   2) computes inventory anchor from stable offsets,
   3) builds storage row centers (`auto`/`parsed`/`estimated`),
   4) detects ore icon centers in `ore_roi` (contour-based),
-  5) writes `layout.json`,
-  6) writes `config.layout.ini` for AHK overrides,
-  7) optionally writes `layout_preview.png`.
+  5) detects target slot centers in top-right HUD (circle-based),
+  6) writes `layout.json`,
+  7) writes `config.layout.ini` for AHK overrides,
+  8) optionally writes `layout_preview.png`.
 
 ## How to Run
 
@@ -57,7 +60,8 @@ AHK reads `config.layout.ini` and combines it with user choices in `config.ini`:
 Runtime selection:
 - storage target = `layout_storage_rows[storage_row_index]`,
 - ore source slots = selected indices from `layout_ore_slots`,
-- fallback = `layout_ore_slot_fallback` when detected list is empty.
+- fallback = `layout_ore_slot_fallback` when detected list is empty,
+- target select candidates = `layout_target_slots` when available.
 
 ## Current Heuristics
 

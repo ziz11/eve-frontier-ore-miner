@@ -63,8 +63,7 @@ This document describes the current `miner.ahk` implementation by modules: logic
 
 ### Logic
 1. Gets candidates from `GetTargetCandidates()`:
-   - dynamic slot scan: `FindDynamicTargetSlots()`;
-   - fallback: `cfg["target_slots"]`.
+   - uses `cfg["target_slots"]` (preferably from `layout_target_slots` via layout override).
 2. Sorts candidates via `SortTargetPoints()` according to `target_slot_order` (`rtl/ltr`).
 3. For each candidate:
    - resolves slot anchor: `GetSlotAnchor()` + `HasSlotWhiteBelow()`;
@@ -74,7 +73,7 @@ This document describes the current `miner.ahk` implementation by modules: logic
 5. If slots were tried but none activated -> `StopWithError("TARGET LOCK failed...")`.
 
 ### Internal Call Path
-- `GetTargetCandidates()` -> `FindDynamicTargetSlots()` -> `PixelNearColor()`.
+- `GetTargetCandidates()` -> `SortTargetPoints()`.
 - `WaitForActiveTarget()` -> `SlotHasActiveTarget()` / `HasActiveTargetOrange()`.
 - `SlotHasActiveTarget()` -> `GetSlotClickPoint()`, `CountColorMatchesInRect()`.
 

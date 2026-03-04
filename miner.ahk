@@ -298,24 +298,17 @@ SelectTopRightTarget() {
 }
 
 GetTargetCandidates() {
-    if cfg["dynamic_target_slot_scan_enabled"] {
-        points := FindDynamicTargetSlots()
-        if points.Length > 0 {
-            SortTargetPoints(points)
-            Debug("select candidates dynamic=" points.Length)
-            return points
-        }
-
-        Debug("select candidates dynamic=0 fallback=static")
-    }
-
-    staticPoints := []
+    points := []
     for p in cfg["target_slots"] {
-        staticPoints.Push([p[1], p[2]])
+        points.Push([p[1], p[2]])
     }
-    SortTargetPoints(staticPoints)
-    Debug("select candidates static=" staticPoints.Length)
-    return staticPoints
+    SortTargetPoints(points)
+    points := DedupeTargetCandidates(points)
+    if points.Length = 0 {
+        Debug("select candidates empty: provide [lists] target_slots or layout_target_slots in layout ini")
+    }
+    Debug("select candidates slots=" points.Length)
+    return points
 }
 
 SortTargetPoints(points) {
@@ -337,6 +330,37 @@ ReversePoints(points) {
         right -= 1
     }
     return points
+}
+
+DedupeTargetCandidates(points) {
+    if points.Length < 2 {
+        return points
+    }
+
+    minSpacing := cfg["target_slot_min_spacing_px"]
+    if minSpacing < 1 {
+        minSpacing := 1
+    }
+
+    out := []
+    for p in points {
+        if out.Length = 0 {
+            out.Push([p[1], p[2]])
+            continue
+        }
+
+        last := out[out.Length]
+        if Abs(p[1] - last[1]) < minSpacing && Abs(p[2] - last[2]) <= cfg["target_slot_y_search_radius_px"] {
+            last[1] := Integer((last[1] + p[1]) / 2)
+            last[2] := Integer((last[2] + p[2]) / 2)
+            out[out.Length] := last
+            continue
+        }
+
+        out.Push([p[1], p[2]])
+    }
+
+    return out
 }
 
 GetSlotAnchor(x, y) {
@@ -379,36 +403,6 @@ HasSlotWhiteBelow(anchorX, anchorY) {
         anchorX + r, y + r,
         cfg["target_slot_exists_white_color"], cfg["target_slot_exists_white_variation"]
     )
-}
-
-FindDynamicTargetSlots() {
-    points := []
-    x1 := cfg["target_region_x1"]
-    y1 := cfg["target_region_y1"]
-    x2 := cfg["target_region_x2"]
-    y2 := cfg["target_region_y2"]
-    step := cfg["target_slot_scan_step_px"]
-    dedupeRadius := cfg["target_slot_dedupe_radius_px"]
-    maxCandidates := cfg["target_slot_max_candidates"]
-    targetColor := Integer(cfg["target_present_color"])
-    variation := cfg["color_variation"]
-
-    y := y1
-    while y <= y2 {
-        x := x1
-        while x <= x2 {
-            if PixelNearColor(x, y, targetColor, variation) && !HasNearbyPoint(points, x, y, dedupeRadius) {
-                points.Push([x, y])
-                if points.Length >= maxCandidates {
-                    return points
-                }
-            }
-            x += step
-        }
-        y += step
-    }
-
-    return points
 }
 
 WaitForActiveTarget(slotX := 0, slotY := 0, preActive := false) {
@@ -534,15 +528,24 @@ DoLaserStage() {
     }
 
     now := A_TickCount
+    oreTransferIntervalMs := cfg["ore_scan_interval_ms"]
+    if oreTransferIntervalMs < 15000 {
+        oreTransferIntervalMs := 15000
+    }
     activeCount := CountActiveLasers()
 
     if activeCount >= cfg["min_active_lasers_required"] {
         laserLostTick := 0
 
         ; LASER stage does periodic ore transfer from configured slot coordinates.
-        if lastOreScanTick = 0 || (now - lastOreScanTick) >= cfg["ore_scan_interval_ms"] {
+        if lastOreScanTick = 0 || (now - lastOreScanTick) >= oreTransferIntervalMs {
             lastOreScanTick := now
             moved := TryTransferOre()
+            if !HasSelectedTargetActive() {
+                oreNoTextStreak := 0
+                SetState(STATE_SELECT, "selected target lost after ore transfer focus")
+                return
+            }
             if moved > 0 {
                 oreNoTextStreak := 0
                 return
@@ -567,9 +570,14 @@ DoLaserStage() {
     if cfg["laser_allow_partial"] && activeCount > 0 {
         laserLostTick := 0
         ; Keep ore flow alive even in partial mode.
-        if lastOreScanTick = 0 || (now - lastOreScanTick) >= cfg["ore_scan_interval_ms"] {
+        if lastOreScanTick = 0 || (now - lastOreScanTick) >= oreTransferIntervalMs {
             lastOreScanTick := now
             moved := TryTransferOre()
+            if !HasSelectedTargetActive() {
+                oreNoTextStreak := 0
+                SetState(STATE_SELECT, "selected target lost after ore transfer focus (partial)")
+                return
+            }
             if moved > 0 {
                 oreNoTextStreak := 0
             } else {
@@ -627,6 +635,10 @@ HasSelectedTargetActive() {
 
 TryActivateLasersBySlots() {
     global lastLaserActionTick, lastTargetSelectedTick
+    if !HasAnyTopRightTarget() || !HasSelectedTargetActive() {
+        Debug("laser activation skipped: target lock is not active")
+        return false
+    }
     slots := GetConfiguredLaserSlots()
     if slots.Length = 0 {
         Debug("laser no configured slots")
@@ -644,6 +656,10 @@ TryActivateLasersBySlots() {
         attempt := 1
         maxAttempts := cfg["laser_slot_attempts"]
         while attempt <= maxAttempts {
+            if !HasAnyTopRightTarget() || !HasSelectedTargetActive() {
+                Debug("laser activation aborted: target lock lost during retries")
+                return anyActive
+            }
             if firstClickAfterSelect {
                 Debug("laser first hover slot#" slot["index"] " point=" slot["x"] "," slot["y"])
                 MouseMove slot["x"], slot["y"], 0
@@ -660,6 +676,7 @@ TryActivateLasersBySlots() {
             Debug("laser activate slot#" slot["index"] " click=" slot["x"] "," slot["y"] " attempt=" attempt "/" maxAttempts)
             LeftClick slot["x"], slot["y"]
             lastLaserActionTick := A_TickCount
+            MoveMouseOffLaserSlots()
             Sleep cfg["laser_slot_retry_delay_ms"]
             if WaitForLaserSlotActive(slot) {
                 Debug("laser activated slot#" slot["index"] " attempt=" attempt)
@@ -749,6 +766,19 @@ WaitForLaserSlotActive(slot) {
     }
 }
 
+MoveMouseOffLaserSlots() {
+    ; Move cursor away from laser controls to avoid hover-state color distortion.
+    if cfg["ship_row_x"] > 0 && cfg["ship_row_y"] > 0 {
+        MouseMove cfg["ship_row_x"], cfg["ship_row_y"], 0
+        return
+    }
+    if cfg["inventory_window_x"] > 0 && cfg["inventory_window_y"] > 0 {
+        MouseMove cfg["inventory_window_x"], cfg["inventory_window_y"], 0
+        return
+    }
+    MouseMove 50, 50, 0
+}
+
 AttemptLaserFailureRecovery() {
     Debug("laser recovery start")
     i := 1
@@ -823,7 +853,7 @@ TryTransferOreBySlots() {
         maxTransfers := cfg["ore_slots"].Length
     }
 
-    FocusInventoryWindow()
+    FocusShipInventoryForTransfer()
     moved := 0
     for p in cfg["ore_slots"] {
         if moved >= maxTransfers {
@@ -833,12 +863,34 @@ TryTransferOreBySlots() {
             continue
         }
 
+        hoverBeforePickMs := cfg["drag_hover_before_pick_ms"]
+        if hoverBeforePickMs < 0 {
+            hoverBeforePickMs := 0
+        }
+        MouseMove p[1], p[2], 0
+        if hoverBeforePickMs > 0 {
+            Sleep hoverBeforePickMs
+        }
         Debug("ore slot drag x=" p[1] " y=" p[2] " -> " portableX "," portableY)
         DragMouse p[1], p[2], portableX, portableY
         Sleep cfg["ui_delay_ms"]
         moved += 1
     }
     return moved
+}
+
+FocusShipInventoryForTransfer() {
+    ; Always force Ship inventory focus before ore drag cycle.
+    if cfg["ship_row_x"] > 0 && cfg["ship_row_y"] > 0 {
+        LeftClick cfg["ship_row_x"], cfg["ship_row_y"]
+        Sleep cfg["ui_delay_ms"]
+        return
+    }
+    ; Fallback point when calibrated ship row click is unavailable.
+    if cfg["inventory_window_x"] > 0 && cfg["inventory_window_y"] > 0 {
+        LeftClick cfg["inventory_window_x"], cfg["inventory_window_y"]
+        Sleep cfg["ui_delay_ms"]
+    }
 }
 
 FocusInventoryWindow() {
@@ -1108,13 +1160,10 @@ LoadConfig() {
     cfg["asteroid_scan_step_px"] := Integer(IniRead("config.ini", "general", "asteroid_scan_step_px", 10))
     cfg["asteroid_dedupe_radius_px"] := Integer(IniRead("config.ini", "general", "asteroid_dedupe_radius_px", 26))
     cfg["asteroid_max_candidates"] := Integer(IniRead("config.ini", "general", "asteroid_max_candidates", 12))
-    cfg["target_slot_scan_step_px"] := Integer(IniRead("config.ini", "general", "target_slot_scan_step_px", 8))
-    cfg["target_slot_dedupe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_dedupe_radius_px", 32))
-    cfg["target_slot_max_candidates"] := Integer(IniRead("config.ini", "general", "target_slot_max_candidates", 8))
-    cfg["dynamic_target_slot_scan_enabled"] := Integer(IniRead("config.ini", "general", "dynamic_target_slot_scan_enabled", 0)) = 1
     cfg["target_slot_y_search_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_y_search_radius_px", 40))
     cfg["target_slot_y_search_step_px"] := Integer(IniRead("config.ini", "general", "target_slot_y_search_step_px", 4))
     cfg["target_slot_x_jitter_px"] := Integer(IniRead("config.ini", "general", "target_slot_x_jitter_px", 10))
+    cfg["target_slot_min_spacing_px"] := Integer(IniRead("config.ini", "general", "target_slot_min_spacing_px", 58))
     cfg["target_slot_active_probe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_active_probe_radius_px", 5))
     cfg["target_slot_click_offset_y"] := Integer(IniRead("config.ini", "general", "target_slot_click_offset_y", 30))
     cfg["target_slot_exists_offset_y"] := Integer(IniRead("config.ini", "general", "target_slot_exists_offset_y", 22))
@@ -1123,6 +1172,7 @@ LoadConfig() {
     cfg["inventory_focus_click_enabled"] := Integer(IniRead("config.ini", "general", "inventory_focus_click_enabled", 0)) = 1
     cfg["drag_duration_ms"] := Integer(IniRead("config.ini", "general", "drag_duration_ms", 380))
     cfg["drag_steps"] := Integer(IniRead("config.ini", "general", "drag_steps", 5))
+    cfg["drag_hover_before_pick_ms"] := Integer(IniRead("config.ini", "general", "drag_hover_before_pick_ms", 180))
     cfg["drag_hold_before_move_ms"] := Integer(IniRead("config.ini", "general", "drag_hold_before_move_ms", 140))
     cfg["drag_hold_after_move_ms"] := Integer(IniRead("config.ini", "general", "drag_hold_after_move_ms", 35))
     cfg["layout_enabled"] := Integer(IniRead("config.ini", "layout", "layout_enabled", 1)) = 1
@@ -1224,7 +1274,7 @@ LoadConfig() {
     cfg["too_far_image"] := IniRead("config.ini", "images", "too_far_image", "")
 
     cfg["asteroid_points"] := ParsePoints(IniRead("config.ini", "lists", "asteroid_points", "670,430|760,400|880,340"))
-    cfg["target_slots"] := ParsePoints(IniRead("config.ini", "lists", "target_slots", "1575,185|1675,185|1775,185"))
+    cfg["target_slots"] := ParsePoints(IniRead("config.ini", "lists", "target_slots", ""))
     cfg["laser_check_points"] := ParsePoints(IniRead("config.ini", "lists", "laser_check_points", "710,980|758,980|0,0"))
     cfg["active_laser_slots_raw"] := IniRead("config.ini", "lists", "active_laser_slots", "1|2")
     cfg["active_laser_slots"] := ParseIntList(cfg["active_laser_slots_raw"], 1, 9)
@@ -1272,10 +1322,21 @@ ApplyLayoutOverrides(layoutIniPath) {
         cfg["ore_scan_x2"] := Integer(oreX2raw)
         cfg["ore_scan_y2"] := Integer(oreY2raw)
     }
+    targetX1raw := IniRead(layoutIniPath, "regions", "target_region_x1", "")
+    targetY1raw := IniRead(layoutIniPath, "regions", "target_region_y1", "")
+    targetX2raw := IniRead(layoutIniPath, "regions", "target_region_x2", "")
+    targetY2raw := IniRead(layoutIniPath, "regions", "target_region_y2", "")
+    if targetX1raw != "" && targetY1raw != "" && targetX2raw != "" && targetY2raw != "" {
+        cfg["target_region_x1"] := Integer(targetX1raw)
+        cfg["target_region_y1"] := Integer(targetY1raw)
+        cfg["target_region_x2"] := Integer(targetX2raw)
+        cfg["target_region_y2"] := Integer(targetY2raw)
+    }
 
     layoutRows := ParsePoints(IniRead(layoutIniPath, "lists", "layout_storage_rows", ""))
     layoutOreSlots := ParsePoints(IniRead(layoutIniPath, "lists", "layout_ore_slots", ""))
     layoutOreFallback := ParsePoints(IniRead(layoutIniPath, "lists", "layout_ore_slot_fallback", ""))
+    layoutTargetSlots := ParsePoints(IniRead(layoutIniPath, "lists", "layout_target_slots", ""))
 
     idx := cfg["storage_row_index"]
     if idx < 1 {
@@ -1307,8 +1368,15 @@ ApplyLayoutOverrides(layoutIniPath) {
     if selectedOreSlots.Length > 0 {
         cfg["ore_slots"] := selectedOreSlots
     }
+    if layoutTargetSlots.Length > 0 {
+        cfg["target_slots"] := layoutTargetSlots
+    }
 
-    Debug("layout override applied storage_index=" cfg["storage_row_index"] " selected_ore_slots=" cfg["ore_slots"].Length)
+    Debug(
+        "layout override applied storage_index=" cfg["storage_row_index"]
+        " selected_ore_slots=" cfg["ore_slots"].Length
+        " target_slots=" cfg["target_slots"].Length
+    )
 }
 
 ParsePoints(raw) {

@@ -21,13 +21,10 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 - `asteroid_scan_step_px`
 - `asteroid_dedupe_radius_px`
 - `asteroid_max_candidates`
-- `target_slot_scan_step_px`
-- `target_slot_dedupe_radius_px`
-- `target_slot_max_candidates`
-- `dynamic_target_slot_scan_enabled`
 - `target_slot_y_search_radius_px`
 - `target_slot_y_search_step_px`
 - `target_slot_x_jitter_px`
+- `target_slot_min_spacing_px`
 - `target_slot_active_probe_radius_px`
 - `target_slot_click_offset_y`
 - `target_slot_exists_offset_y`
@@ -35,8 +32,10 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 - `debug_click_marker_ms`
 - `inventory_focus_click_enabled`
   - when enabled, `FocusInventoryWindow()` clicks `ship_row_x/ship_row_y` first, then falls back to `inventory_window_x/y` only if ship row point is unavailable.
+  - ore transfer also forces a ship-inventory focus click before each drag cycle.
 - `drag_duration_ms`
 - `drag_steps`
+- `drag_hover_before_pick_ms`
 - `drag_hold_before_move_ms`
 - `drag_hold_after_move_ms`
 
@@ -61,6 +60,7 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 - `unload_block_during_laser`
 - `unload_busy_retry_ms`
 - `ore_scan_interval_ms`
+  - effective minimum in runtime is 15000 ms (faster values are clamped).
 - `ore_scan_no_text_limit`
 - `ore_transfer_max_per_scan`
 - `min_active_lasers_required`
@@ -158,8 +158,13 @@ When `[layout] layout_enabled=1`, extra keys are read from `layout_ini_path`:
 - `ore_scan_y1`
 - `ore_scan_x2`
 - `ore_scan_y2`
+- `target_region_x1`
+- `target_region_y1`
+- `target_region_x2`
+- `target_region_y2`
 
 ### [lists]
 - `layout_storage_rows`
 - `layout_ore_slots`
 - `layout_ore_slot_fallback`
+- `layout_target_slots`
