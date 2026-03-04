@@ -140,6 +140,7 @@ Do this in full-screen or stable window size with fixed UI scale.
 - `timers.ore_scan_no_text_limit=2`
 - `timers.ore_transfer_max_per_scan=3`
 - `timers.laser_after_target_select_delay_ms=1000`
+- `timers.laser_first_click_after_target_select_delay_ms=150`
 - `timers.laser_after_activate_grace_ms=1000`
 - `timers.laser_slot_attempts=5`
 - `timers.laser_slot_retry_delay_ms=1000`
@@ -237,6 +238,7 @@ All values are read from local `config.ini`.
 - `min_active_lasers_required` - minimum active laser indicators required to treat LASER stage as healthy.
 - `laser_probe_radius_px` - local radius for checking each laser activity pixel (for rotating orange indicator).
 - `laser_after_target_select_delay_ms` - minimum delay before first laser activation attempt after target selection.
+- `laser_first_click_after_target_select_delay_ms` - extra one-time pause right before the very first laser click after target selection (helps UI settle after cursor move).
 - `laser_after_activate_grace_ms` - grace period after laser-click activation before rechecking/failure handling.
 - `laser_slot_attempts` - per-laser-slot activation attempts before moving to the next slot.
 - `laser_slot_retry_delay_ms` - delay after each per-slot activation press.

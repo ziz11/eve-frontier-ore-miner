@@ -42,6 +42,7 @@ ore_transfer_max_per_scan=3
 min_active_lasers_required=1
 laser_probe_radius_px=3
 laser_after_target_select_delay_ms=1000
+laser_first_click_after_target_select_delay_ms=150
 laser_after_activate_grace_ms=1000
 laser_slot_attempts=5
 laser_slot_retry_delay_ms=1000

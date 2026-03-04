@@ -4,6 +4,11 @@
 # Local runtime config and secrets
 secrets.ini
 config.local.ini
+*.local.ini
+*.override.ini
 
 # Optional: ignore local tuned config; commit config.ini.example instead
 config.ini
+
+# Local runtime logs
+logs/

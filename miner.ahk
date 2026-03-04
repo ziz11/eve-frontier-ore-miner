@@ -619,7 +619,7 @@ HasSelectedTargetActive() {
 }
 
 TryActivateLasersBySlots() {
-    global lastLaserActionTick
+    global lastLaserActionTick, lastTargetSelectedTick
     slots := GetConfiguredLaserSlots()
     if slots.Length = 0 {
         Debug("laser no configured slots")
@@ -627,6 +627,7 @@ TryActivateLasersBySlots() {
     }
 
     anyActive := false
+    firstClickAfterSelect := lastTargetSelectedTick > 0 && (lastLaserActionTick = 0 || lastLaserActionTick < lastTargetSelectedTick)
     for slot in slots {
         if IsLaserSlotActive(slot) {
             anyActive := true
@@ -636,6 +637,11 @@ TryActivateLasersBySlots() {
         attempt := 1
         maxAttempts := cfg["laser_slot_attempts"]
         while attempt <= maxAttempts {
+            if firstClickAfterSelect && cfg["laser_first_click_after_target_select_delay_ms"] > 0 {
+                Debug("laser first click settle delay_ms=" cfg["laser_first_click_after_target_select_delay_ms"])
+                Sleep cfg["laser_first_click_after_target_select_delay_ms"]
+                firstClickAfterSelect := false
+            }
             Debug("laser activate slot#" slot["index"] " click=" slot["x"] "," slot["y"] " attempt=" attempt "/" maxAttempts)
             LeftClick slot["x"], slot["y"]
             lastLaserActionTick := A_TickCount
@@ -1219,6 +1225,7 @@ LoadConfig() {
     cfg["min_active_lasers_required"] := Integer(IniRead("config.ini", "timers", "min_active_lasers_required", 1))
     cfg["laser_probe_radius_px"] := Integer(IniRead("config.ini", "timers", "laser_probe_radius_px", 3))
     cfg["laser_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_after_target_select_delay_ms", 1000))
+    cfg["laser_first_click_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_first_click_after_target_select_delay_ms", 150))
     cfg["laser_after_activate_grace_ms"] := Integer(IniRead("config.ini", "timers", "laser_after_activate_grace_ms", 1000))
     cfg["laser_slot_attempts"] := Integer(IniRead("config.ini", "timers", "laser_slot_attempts", 5))
     cfg["laser_slot_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_slot_retry_delay_ms", 1000))
