@@ -339,11 +339,6 @@ ReversePoints(points) {
     return points
 }
 
-SlotHasTarget(x, y) {
-    p := GetSlotAnchor(x, y)
-    return p.Length >= 2
-}
-
 GetSlotAnchor(x, y) {
     if HasSlotWhiteBelow(x, y) {
         return [x, y]
@@ -384,10 +379,6 @@ HasSlotWhiteBelow(anchorX, anchorY) {
         anchorX + r, y + r,
         cfg["target_slot_exists_white_color"], cfg["target_slot_exists_white_variation"]
     )
-}
-
-IsColorNear(x, y, targetColor, variation) {
-    return PixelInRect(x - 1, y - 1, x + 1, y + 1, targetColor, variation)
 }
 
 FindDynamicTargetSlots() {
@@ -653,9 +644,17 @@ TryActivateLasersBySlots() {
         attempt := 1
         maxAttempts := cfg["laser_slot_attempts"]
         while attempt <= maxAttempts {
-            if firstClickAfterSelect && cfg["laser_first_click_after_target_select_delay_ms"] > 0 {
-                Debug("laser first click settle delay_ms=" cfg["laser_first_click_after_target_select_delay_ms"])
-                Sleep cfg["laser_first_click_after_target_select_delay_ms"]
+            if firstClickAfterSelect {
+                Debug("laser first hover slot#" slot["index"] " point=" slot["x"] "," slot["y"])
+                MouseMove slot["x"], slot["y"], 0
+                if cfg["laser_first_hover_before_click_delay_ms"] > 0 {
+                    Debug("laser first hover settle delay_ms=" cfg["laser_first_hover_before_click_delay_ms"])
+                    Sleep cfg["laser_first_hover_before_click_delay_ms"]
+                }
+                if cfg["laser_first_click_after_target_select_delay_ms"] > 0 {
+                    Debug("laser first click settle delay_ms=" cfg["laser_first_click_after_target_select_delay_ms"])
+                    Sleep cfg["laser_first_click_after_target_select_delay_ms"]
+                }
                 firstClickAfterSelect := false
             }
             Debug("laser activate slot#" slot["index"] " click=" slot["x"] "," slot["y"] " attempt=" attempt "/" maxAttempts)
@@ -800,7 +799,6 @@ TryEmergencyLock() {
 DoUnload() {
     Debug(
         "unload start slots=" cfg["ore_slots"].Length
-        " mode=" cfg["ore_transfer_mode"]
         " ore_scan=" cfg["ore_scan_x1"] "," cfg["ore_scan_y1"] "-" cfg["ore_scan_x2"] "," cfg["ore_scan_y2"]
         " portable=" cfg["portable_row_x"] "," cfg["portable_row_y"]
     )
@@ -813,6 +811,13 @@ TryTransferOre() {
 }
 
 TryTransferOreBySlots() {
+    portableX := cfg["portable_row_x"]
+    portableY := cfg["portable_row_y"]
+    if !IsNumericCoord(portableX) || !IsNumericCoord(portableY) {
+        Debug("portable row invalid coords x=" portableX " y=" portableY " skip slot transfer")
+        return 0
+    }
+
     maxTransfers := cfg["ore_transfer_max_per_scan"]
     if maxTransfers < 1 {
         maxTransfers := cfg["ore_slots"].Length
@@ -827,201 +832,29 @@ TryTransferOreBySlots() {
         if !IsNumericCoord(p[1]) || !IsNumericCoord(p[2]) {
             continue
         }
-        if !IsNumericCoord(cfg["portable_row_x"]) || !IsNumericCoord(cfg["portable_row_y"]) {
-            Debug("portable row invalid coords x=" cfg["portable_row_x"] " y=" cfg["portable_row_y"] " skip slot transfer")
-            break
-        }
 
-        Debug("ore slot drag x=" p[1] " y=" p[2] " -> " cfg["portable_row_x"] "," cfg["portable_row_y"])
-        DragMouse p[1], p[2], cfg["portable_row_x"], cfg["portable_row_y"]
+        Debug("ore slot drag x=" p[1] " y=" p[2] " -> " portableX "," portableY)
+        DragMouse p[1], p[2], portableX, portableY
         Sleep cfg["ui_delay_ms"]
         moved += 1
     }
     return moved
-}
-
-TryTransferOreByTextWithRecovery() {
-    moved := TryTransferOreByText()
-    if moved > 0 {
-        return moved
-    }
-    if cfg["ship_reanchor_mode"] = "fallback" {
-        Debug("ore text not found -> reanchor ship and retry once")
-        MaybeReanchorShip("text_retry")
-        return TryTransferOreByText()
-    }
-    return 0
-}
-
-TryTransferOreByText() {
-    maxTransfers := cfg["ore_transfer_max_per_scan"]
-    if maxTransfers < 1 {
-        return 0
-    }
-
-    FocusInventoryWindow()
-
-    moved := 0
-    i := 1
-    while i <= maxTransfers {
-        p := FindOreTextPixel()
-        if p.Length < 2 {
-            break
-        }
-        if !IsNumericCoord(p[1]) || !IsNumericCoord(p[2]) {
-            Debug("ore text invalid coords x=" p[1] " y=" p[2] " skip transfer")
-            break
-        }
-        if !IsNumericCoord(cfg["portable_row_x"]) || !IsNumericCoord(cfg["portable_row_y"]) {
-            Debug("portable row invalid coords x=" cfg["portable_row_x"] " y=" cfg["portable_row_y"] " skip transfer")
-            break
-        }
-
-        dragX := p[1]
-        dragY := p[2] + cfg["ore_drag_offset_y"]
-        if !IsNumericCoord(dragX) || !IsNumericCoord(dragY) {
-            Debug("ore drag invalid source coords x=" dragX " y=" dragY " skip transfer")
-            break
-        }
-
-        Debug("ore text found x=" p[1] " y=" p[2] " drag_from=" dragX "," dragY " transfer#" i "/" maxTransfers)
-        DragMouse dragX, dragY, cfg["portable_row_x"], cfg["portable_row_y"]
-        Sleep cfg["ui_delay_ms"]
-        moved += 1
-
-        ; Keep lasers alive while unloading ore stacks.
-        if CountActiveLasers() < cfg["min_active_lasers_required"] {
-            Debug("ore transfer detected inactive lasers -> re-activate")
-            TryActivateLasersBySlots()
-        }
-
-        i += 1
-    }
-
-    if moved = 0 && cfg["debug_enabled"] {
-        Debug(
-            "ore text not found in region="
-            cfg["ore_scan_x1"] "," cfg["ore_scan_y1"] "-" cfg["ore_scan_x2"] "," cfg["ore_scan_y2"]
-            " color=" Format("0x{:06X}", cfg["ore_text_color"])
-            " var=" cfg["ore_text_variation"]
-        )
-    }
-    return moved
-}
-
-FindOreTextPixel() {
-    x1 := cfg["ore_scan_x1"]
-    y1 := cfg["ore_scan_y1"]
-    x2 := cfg["ore_scan_x2"]
-    y2 := cfg["ore_scan_y2"]
-    color := cfg["ore_text_color"]
-    variation := cfg["ore_text_variation"]
-    useCluster := cfg["ore_cluster_enabled"]
-
-    curX := x1
-    curY := y1
-    loop {
-    x := ""
-    y := ""
-    try {
-        found := PixelSearch(&x, &y
-            , curX, curY
-            , x2, y2
-            , color, variation)
-        if !found {
-            return []
-        }
-        if !IsNumericCoord(x) || !IsNumericCoord(y) {
-            if cfg["debug_enabled"] {
-                Debug("ore text search returned non-numeric coords x=" x " y=" y)
-            }
-            return []
-        }
-        px := Integer(x)
-        py := Integer(y)
-        if !useCluster || HasOreDigitCluster(px, py) {
-            return [px, py]
-        }
-
-        ; Keep searching from the next pixel when cluster check fails.
-        nextX := px + 1
-        nextY := py
-        if nextX > x2 {
-            nextX := x1
-            nextY := py + 1
-        }
-        if nextY > y2 {
-            return []
-        }
-        curX := nextX
-        curY := nextY
-    } catch {
-        return []
-    }
-    }
-}
-
-HasOreDigitCluster(px, py) {
-    lineLen := cfg["ore_cluster_len_px"]
-    minHits := cfg["ore_cluster_min_hits"]
-    threshold := cfg["ore_cluster_threshold"]
-    if lineLen < 1 || minHits < 1 {
-        return true
-    }
-
-    hits := 0
-    i := 0
-    while i < lineLen {
-        try {
-            c := PixelGetColor(px + i, py, "RGB")
-            if IsColorBrightEnough(c, threshold) {
-                hits += 1
-                if hits >= minHits {
-                    return true
-                }
-            }
-        } catch {
-        }
-        i += 1
-    }
-    return false
-}
-
-IsColorBrightEnough(color, threshold) {
-    r := (color >> 16) & 0xFF
-    g := (color >> 8) & 0xFF
-    b := color & 0xFF
-
-    tr := (threshold >> 16) & 0xFF
-    tg := (threshold >> 8) & 0xFF
-    tb := threshold & 0xFF
-
-    return r >= tr && g >= tg && b >= tb
 }
 
 FocusInventoryWindow() {
+    if !cfg["inventory_focus_click_enabled"] {
+        return
+    }
+    ; Prefer ship row point from layout calibration (Python -> config.layout.ini).
+    if cfg["ship_row_x"] > 0 && cfg["ship_row_y"] > 0 {
+        LeftClick cfg["ship_row_x"], cfg["ship_row_y"]
+        Sleep cfg["ui_delay_ms"]
+        return
+    }
+    ; Backward fallback if ship row is not configured.
     if cfg["inventory_window_x"] > 0 && cfg["inventory_window_y"] > 0 {
         LeftClick cfg["inventory_window_x"], cfg["inventory_window_y"]
         Sleep cfg["ui_delay_ms"]
-    }
-}
-
-SelectShipInventory() {
-    LeftClick cfg["ship_row_x"], cfg["ship_row_y"]
-    Sleep cfg["ui_delay_ms"]
-}
-
-MaybeReanchorShip(reason := "") {
-    mode := cfg["ship_reanchor_mode"]
-    if mode = "always" {
-        Debug("ship reanchor reason=" reason " mode=always")
-        SelectShipInventory()
-        return
-    }
-    if mode = "fallback" {
-        Debug("ship reanchor reason=" reason " mode=fallback")
-        SelectShipInventory()
-        return
     }
 }
 
@@ -1128,18 +961,6 @@ PixelInRect(x1, y1, x2, y2, color, variation) {
     } catch {
         return false
     }
-}
-
-PixelNear(x, y, color, variation) {
-    return PixelNearWithRadius(x, y, color, variation, 4)
-}
-
-PixelNearWithRadius(x, y, color, variation, radius) {
-    x1 := x - radius
-    y1 := y - radius
-    x2 := x + radius
-    y2 := y + radius
-    return PixelInRect(x1, y1, x2, y2, color, variation)
 }
 
 CountColorMatchesInRect(x1, y1, x2, y2, targetColor, variation, stopAt := 0, &sampleColor := 0, &sampleX := 0, &sampleY := 0) {
@@ -1291,21 +1112,15 @@ LoadConfig() {
     cfg["target_slot_dedupe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_dedupe_radius_px", 32))
     cfg["target_slot_max_candidates"] := Integer(IniRead("config.ini", "general", "target_slot_max_candidates", 8))
     cfg["dynamic_target_slot_scan_enabled"] := Integer(IniRead("config.ini", "general", "dynamic_target_slot_scan_enabled", 0)) = 1
-    cfg["target_slot_probe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_probe_radius_px", 24))
     cfg["target_slot_y_search_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_y_search_radius_px", 40))
     cfg["target_slot_y_search_step_px"] := Integer(IniRead("config.ini", "general", "target_slot_y_search_step_px", 4))
     cfg["target_slot_x_jitter_px"] := Integer(IniRead("config.ini", "general", "target_slot_x_jitter_px", 10))
     cfg["target_slot_active_probe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_active_probe_radius_px", 5))
     cfg["target_slot_click_offset_y"] := Integer(IniRead("config.ini", "general", "target_slot_click_offset_y", 30))
-    cfg["ore_drag_offset_y"] := Integer(IniRead("config.ini", "general", "ore_drag_offset_y", 30))
     cfg["target_slot_exists_offset_y"] := Integer(IniRead("config.ini", "general", "target_slot_exists_offset_y", 22))
     cfg["target_slot_exists_probe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_exists_probe_radius_px", 5))
     cfg["debug_click_marker_ms"] := Integer(IniRead("config.ini", "general", "debug_click_marker_ms", 0))
-    cfg["ship_reanchor_mode"] := StrLower(Trim(IniRead("config.ini", "general", "ship_reanchor_mode", "off")))
-    if !(cfg["ship_reanchor_mode"] = "off" || cfg["ship_reanchor_mode"] = "fallback" || cfg["ship_reanchor_mode"] = "always") {
-        cfg["ship_reanchor_mode"] := "off"
-    }
-    cfg["ore_transfer_mode"] := "slots"
+    cfg["inventory_focus_click_enabled"] := Integer(IniRead("config.ini", "general", "inventory_focus_click_enabled", 0)) = 1
     cfg["drag_duration_ms"] := Integer(IniRead("config.ini", "general", "drag_duration_ms", 380))
     cfg["drag_steps"] := Integer(IniRead("config.ini", "general", "drag_steps", 5))
     cfg["drag_hold_before_move_ms"] := Integer(IniRead("config.ini", "general", "drag_hold_before_move_ms", 140))
@@ -1329,13 +1144,13 @@ LoadConfig() {
     cfg["unload_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "unload_after_target_select_delay_ms", 1000))
     cfg["unload_block_during_laser"] := Integer(IniRead("config.ini", "timers", "unload_block_during_laser", 1)) = 1
     cfg["unload_busy_retry_ms"] := Integer(IniRead("config.ini", "timers", "unload_busy_retry_ms", 1500))
-    cfg["unload_allow_slot_fallback"] := Integer(IniRead("config.ini", "timers", "unload_allow_slot_fallback", 0)) = 1
     cfg["ore_scan_interval_ms"] := Integer(IniRead("config.ini", "timers", "ore_scan_interval_ms", 10000))
     cfg["ore_scan_no_text_limit"] := Integer(IniRead("config.ini", "timers", "ore_scan_no_text_limit", 2))
     cfg["ore_transfer_max_per_scan"] := Integer(IniRead("config.ini", "timers", "ore_transfer_max_per_scan", 3))
     cfg["min_active_lasers_required"] := Integer(IniRead("config.ini", "timers", "min_active_lasers_required", 1))
     cfg["laser_probe_radius_px"] := Integer(IniRead("config.ini", "timers", "laser_probe_radius_px", 3))
     cfg["laser_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_after_target_select_delay_ms", 1000))
+    cfg["laser_first_hover_before_click_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_first_hover_before_click_delay_ms", 250))
     cfg["laser_first_click_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_first_click_after_target_select_delay_ms", 150))
     cfg["laser_after_activate_grace_ms"] := Integer(IniRead("config.ini", "timers", "laser_after_activate_grace_ms", 1000))
     cfg["laser_slot_attempts"] := Integer(IniRead("config.ini", "timers", "laser_slot_attempts", 5))
@@ -1383,12 +1198,6 @@ LoadConfig() {
     cfg["laser_active_orange_color"] := IniRead("config.ini", "colors", "laser_active_orange_color", "0xFFB600")
     cfg["laser_active_min_hits"] := Integer(IniRead("config.ini", "colors", "laser_active_min_hits", 2))
     cfg["laser_debug_log"] := Integer(IniRead("config.ini", "colors", "laser_debug_log", 0)) = 1
-    cfg["ore_text_color"] := Integer(IniRead("config.ini", "colors", "ore_text_color", "0xFFFFFF"))
-    cfg["ore_text_variation"] := Integer(IniRead("config.ini", "colors", "ore_text_variation", 40))
-    cfg["ore_cluster_enabled"] := Integer(IniRead("config.ini", "colors", "ore_cluster_enabled", 1)) = 1
-    cfg["ore_cluster_len_px"] := Integer(IniRead("config.ini", "colors", "ore_cluster_len_px", 6))
-    cfg["ore_cluster_min_hits"] := Integer(IniRead("config.ini", "colors", "ore_cluster_min_hits", 2))
-    cfg["ore_cluster_threshold"] := Integer(IniRead("config.ini", "colors", "ore_cluster_threshold", "0xE0E0E0"))
     cfg["asteroid_marker_color"] := Integer(IniRead("config.ini", "colors", "asteroid_marker_color", "0xF0F0F0"))
     cfg["color_variation"] := Integer(IniRead("config.ini", "colors", "color_variation", 28))
     cfg["laser_color_variation"] := Integer(IniRead("config.ini", "colors", "laser_color_variation", 12))
@@ -1504,11 +1313,26 @@ ApplyLayoutOverrides(layoutIniPath) {
 
 ParsePoints(raw) {
     out := []
+    if Trim(raw) = "" {
+        return out
+    }
+
     parts := StrSplit(raw, "|")
     for _, p in parts {
-        xy := StrSplit(p, ",")
-        if xy.Length >= 2 {
-            out.Push([Integer(xy[1]), Integer(xy[2])])
+        token := Trim(p)
+        if token = "" {
+            continue
+        }
+
+        xy := StrSplit(token, ",")
+        if xy.Length < 2 {
+            continue
+        }
+
+        xRaw := Trim(xy[1])
+        yRaw := Trim(xy[2])
+        if RegExMatch(xRaw, "^-?\d+$") && RegExMatch(yRaw, "^-?\d+$") {
+            out.Push([Integer(xRaw), Integer(yRaw)])
         }
     }
     return out

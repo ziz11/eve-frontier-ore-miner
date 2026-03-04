@@ -40,7 +40,6 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import configparser
 
@@ -59,8 +58,37 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def ensure_int_point(p: Tuple[float, float] | Point) -> Point:
-    return (int(round(p[0])), int(round(p[1])))
+def clamp_int(v: int, lo: int, hi: int) -> int:
+    if hi < lo:
+        return int(lo)
+    return int(max(lo, min(hi, int(v))))
+
+
+def clamp_point(pt: Point, w: int, h: int) -> Point:
+    return (
+        clamp_int(int(pt[0]), 0, max(0, w - 1)),
+        clamp_int(int(pt[1]), 0, max(0, h - 1)),
+    )
+
+
+def clamp_rect(rect: Rect, w: int, h: int) -> Optional[Rect]:
+    if w <= 0 or h <= 0:
+        return None
+
+    x1, y1, x2, y2 = rect
+    x1 = clamp_int(int(x1), 0, w - 1)
+    y1 = clamp_int(int(y1), 0, h - 1)
+    x2 = clamp_int(int(x2), 1, w)
+    y2 = clamp_int(int(y2), 1, h)
+
+    if x2 <= x1:
+        x2 = min(w, x1 + 1)
+    if y2 <= y1:
+        y2 = min(h, y1 + 1)
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return (int(x1), int(y1), int(x2), int(y2))
 
 
 # ---------------------------
@@ -102,21 +130,49 @@ def find_ship_marker(img_bgr: np.ndarray, roi_rect: Rect) -> Optional[Point]:
 
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+    img_h = img_bgr.shape[0]
+    target_side = float(max(12.0, img_h * 0.020))
+    min_side = float(max(6.0, target_side * 0.45))
+    max_side = float(max(16.0, target_side * 1.90))
+
     best = None
     best_score = -1.0
 
     for c in cnts:
         area = float(cv2.contourArea(c))
-        if area < 8 or area > 1200:
+        if area < 12 or area > 2000:
             continue
 
         x, y, w, h = cv2.boundingRect(c)
-        aspect = w / max(h, 1)
-        if not (0.4 <= aspect <= 2.5):
+        if w < min_side or h < min_side or w > max_side or h > max_side:
             continue
 
-        # Prefer compact, near-square blobs
-        score = area - abs(w - h) * 2.0
+        aspect = w / max(h, 1)
+        if not (0.70 <= aspect <= 1.45):
+            continue
+
+        box_area = float(w * h)
+        fill_ratio = area / max(box_area, 1.0)
+        if fill_ratio < 0.72:
+            continue
+
+        patch_hsv = hsv[y:y + h, x:x + w]
+        if patch_hsv.size == 0:
+            continue
+        mean_h = float(np.mean(patch_hsv[:, :, 0]))
+        mean_s = float(np.mean(patch_hsv[:, :, 1]))
+        mean_v = float(np.mean(patch_hsv[:, :, 2]))
+        if mean_s < 55:
+            continue
+
+        # Prefer compact, saturated green-ish square markers near expected UI icon size.
+        hue_penalty = abs(mean_h - 60.0) * 1.2
+        size_penalty = abs(np.sqrt(box_area) - target_side) * 6.0
+        square_bonus = 30.0 - abs(w - h) * 2.0
+        fill_bonus = (fill_ratio - 0.72) * 220.0
+        sat_bonus = (mean_s - 55.0) * 0.35
+        dark_bonus = max(0.0, 120.0 - mean_v) * 0.18
+        score = fill_bonus + square_bonus + sat_bonus + dark_bonus - hue_penalty - size_penalty
         if score > best_score:
             best_score = score
             best = (x, y, w, h)
@@ -133,6 +189,7 @@ def find_ship_marker(img_bgr: np.ndarray, roi_rect: Rect) -> Optional[Point]:
 def detect_storage_rows_from_profile(
     img_bgr: np.ndarray,
     ship_marker: Point,
+    target_x: Optional[int] = None,
     max_rows: int = 8,
 ) -> List[Point]:
     """
@@ -140,6 +197,7 @@ def detect_storage_rows_from_profile(
     This captures real gaps (row can be immediately below Ship or with spacing).
     """
     ship_x, ship_y = ship_marker
+    row_x = int(ship_x if target_x is None else target_x)
     h, w = img_bgr.shape[:2]
 
     # Narrow strip where row bullets/icons are expected in inventory tree.
@@ -175,7 +233,8 @@ def detect_storage_rows_from_profile(
             merged.append((yi, score))
             continue
         prev_y, prev_score = merged[-1]
-        if yi - prev_y <= 10:
+        # Nearby peaks usually come from the same row icon/text edge pair.
+        if yi - prev_y <= 16:
             if score > prev_score:
                 merged[-1] = (yi, score)
         else:
@@ -183,21 +242,48 @@ def detect_storage_rows_from_profile(
 
     out: List[Point] = []
     prev_abs_y: Optional[int] = None
+    prev_gap: Optional[int] = None
     for yi, _ in merged:
         abs_y = int(y1 + yi)
-        if prev_abs_y is not None and (abs_y - prev_abs_y) > 70:
-            break
-        out.append((int(ship_x), abs_y))
+        if prev_abs_y is not None:
+            gap = int(abs_y - prev_abs_y)
+            if gap <= 0:
+                continue
+
+            # Keep rows in one local cluster: storage rows are near-uniformly spaced.
+            # This avoids jumping to unrelated lower UI elements on bright backgrounds.
+            if prev_gap is None:
+                min_gap = 10
+                max_gap = 46
+            else:
+                min_gap = max(8, int(round(prev_gap * 0.45)))
+                max_gap = max(46, int(round(prev_gap * 1.75)))
+
+            if gap < min_gap:
+                continue
+            if gap > max_gap:
+                break
+
+            prev_gap = gap if prev_gap is None else int(round(0.6 * prev_gap + 0.4 * gap))
+
+        out.append((row_x, abs_y))
         prev_abs_y = abs_y
         if len(out) >= max_rows:
             break
     return out
 
 
-def estimate_storage_rows(ship_marker: Point, row_count: int = 5, row_h: int = 25, first_row_offset: int = 55) -> List[Point]:
+def estimate_storage_rows(
+    ship_marker: Point,
+    target_x: Optional[int] = None,
+    row_count: int = 5,
+    row_h: int = 25,
+    first_row_offset: int = 55,
+) -> List[Point]:
     ship_x, ship_y = ship_marker
+    row_x = int(ship_x if target_x is None else target_x)
     y0 = ship_y + first_row_offset
-    return [(int(ship_x), int(y0 + row_h * i)) for i in range(row_count)]
+    return [(row_x, int(y0 + row_h * i)) for i in range(row_count)]
 
 
 # ---------------------------
@@ -365,6 +451,8 @@ def detect_inventory_layout(
     image_path: str,
     ore_point_mode: str = "center",
     storage_row_mode: str = "auto",
+    row_text_offset_x: int = 72,
+    ship_search_mode: str = "auto",
 ) -> Dict:
     """
     Detect layout from screenshot:
@@ -382,25 +470,44 @@ def detect_inventory_layout(
 
     h, w = img.shape[:2]
 
-    # Search ROI: bottom-right area where inventory is expected
-    roi_rect: Rect = (int(w * 0.60), int(h * 0.60), int(w * 0.995), int(h * 0.99))
+    # Search ROI: fast preferred area (legacy). Full-screen fallback is available.
+    preferred_roi: Rect = (int(w * 0.60), int(h * 0.60), int(w * 0.995), int(h * 0.99))
+    full_roi: Rect = (0, 0, int(w), int(h))
 
-    ship = find_ship_marker(img, roi_rect)
+    ship = None
+    ship_search_mode_used = "none"
+    mode = str(ship_search_mode).strip().lower()
+    if mode == "roi":
+        ship = find_ship_marker(img, preferred_roi)
+        ship_search_mode_used = "roi"
+    elif mode == "full":
+        ship = find_ship_marker(img, full_roi)
+        ship_search_mode_used = "full"
+    else:
+        ship = find_ship_marker(img, preferred_roi)
+        if ship is not None:
+            ship_search_mode_used = "roi"
+        else:
+            ship = find_ship_marker(img, full_roi)
+            ship_search_mode_used = "full"
+
     if ship is None:
         raise RuntimeError(
             "Ship marker not found. "
-            "Tip: ensure Inventory is visible in bottom-right and the green marker is present. "
-            "If this is unstable, switch to header-based inventory detection."
+            "Tip: ensure Inventory is visible and the green marker is present. "
+            "Try --ship-search-mode full for full-screen search."
         )
 
     ship_x, ship_y = ship
 
     # Calibrated offsets from your screenshots (tune once if needed)
-    inv_x = ship_x - 32
-    inv_y = ship_y - 65
+    inv_x = clamp_int(ship_x - 32, 0, w - 1)
+    inv_y = clamp_int(ship_y - 65, 0, h - 1)
+    row_click_x = int(min(w - 1, max(0, ship_x + row_text_offset_x)))
+    ship_row_click = clamp_point((row_click_x, int(ship_y)), w, h)
 
-    parsed_storage_rows = detect_storage_rows_from_profile(img, ship)
-    estimated_storage_rows = estimate_storage_rows(ship)
+    parsed_storage_rows = detect_storage_rows_from_profile(img, ship, target_x=row_click_x)
+    estimated_storage_rows = estimate_storage_rows(ship, target_x=row_click_x)
     storage_rows_mode_used = "estimated"
     storage_rows = estimated_storage_rows
 
@@ -417,22 +524,31 @@ def detect_inventory_layout(
         storage_rows_mode_used = "estimated"
 
     # Ore ROI: first row area (relative to inv anchor), widened to avoid clipping first tile.
-    ore_roi: Rect = (int(inv_x + 140), int(inv_y + 20), int(inv_x + 470), int(inv_y + 170))
+    ore_roi = clamp_rect((int(inv_x + 140), int(inv_y + 20), int(inv_x + 470), int(inv_y + 170)), w, h)
 
-    detected_ore_slots = detect_ore_slots(img, ore_roi, point_mode=ore_point_mode)
-    synthesized_ore_slots = synthesize_ore_slots_from_roi(ore_roi, point_mode=ore_point_mode, max_slots=4)
+    detected_ore_slots = detect_ore_slots(img, ore_roi, point_mode=ore_point_mode) if ore_roi else []
+    synthesized_ore_slots = (
+        synthesize_ore_slots_from_roi(ore_roi, point_mode=ore_point_mode, max_slots=4)
+        if ore_roi
+        else []
+    )
 
     ore_slots_source = "detected"
     ore_slots = detected_ore_slots
     if len(ore_slots) == 0 and len(synthesized_ore_slots) > 0:
         ore_slots = synthesized_ore_slots
         ore_slots_source = "synthetic"
+    ore_slots = [clamp_point(p, w, h) for p in ore_slots]
+    storage_rows = [clamp_point(p, w, h) for p in storage_rows]
 
     params = {
         "image_path": str(image_path),
         "image_size": (int(w), int(h)),
         "inventory_anchor": (int(inv_x), int(inv_y)),
         "ship_marker": (int(ship_x), int(ship_y)),
+        "ship_row_click": ship_row_click,
+        "ship_search_mode_used": ship_search_mode_used,
+        "row_text_offset_x": int(row_text_offset_x),
         "storage_rows": storage_rows,
         "storage_rows_mode": storage_rows_mode_used,
         "storage_rows_parsed_count": int(len(parsed_storage_rows)),
@@ -466,6 +582,7 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
 
     inv_x, inv_y = params["inventory_anchor"]
     ship_x, ship_y = params.get("ship_marker", (None, None))
+    ship_row_click = params.get("ship_row_click")
 
     storage_rows: List[Point] = params.get("storage_rows", [])
     ore_roi: Optional[Rect] = params.get("ore_roi")
@@ -476,7 +593,7 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
     def to_offset(pt: Point) -> Dict[str, int]:
         return {"dx": int(pt[0] - inv_x), "dy": int(pt[1] - inv_y)}
 
-    fallback_slot = compute_fallback_ore_slot(params)
+    fallback_slot = clamp_point(compute_fallback_ore_slot(params), img_w, img_h)
 
     layout = {
         "meta": {
@@ -494,6 +611,7 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
         "inventory": {
             "anchor": {"x": int(inv_x), "y": int(inv_y)},
             "ship_marker": None if ship_x is None else {"x": int(ship_x), "y": int(ship_y)},
+            "ship_row_click": None if not ship_row_click else {"x": int(ship_row_click[0]), "y": int(ship_row_click[1])},
         },
         "storage": {
             "rows": [{"x": int(x), "y": int(y)} for (x, y) in storage_rows],
@@ -539,15 +657,15 @@ def save_layout_ini(layout: Dict, out_path: str) -> None:
     cfg = configparser.ConfigParser()
     cfg.optionxform = str
 
-    ship = layout["inventory"]["ship_marker"] or {}
+    ship_click = layout["inventory"].get("ship_row_click") or layout["inventory"].get("ship_marker") or {}
     ore_roi = layout["ore"]["roi"] or {}
     storage_rows = layout["storage"]["rows"] or []
     ore_slots = layout["ore"]["slots"] or []
     ore_fallback = layout["ore"]["slot_fallback"]
 
     cfg["points"] = {
-        "ship_row_x": str(int(ship.get("x", 0))),
-        "ship_row_y": str(int(ship.get("y", 0))),
+        "ship_row_x": str(int(ship_click.get("x", 0))),
+        "ship_row_y": str(int(ship_click.get("y", 0))),
     }
     cfg["regions"] = {
         "ore_scan_x1": str(int(ore_roi.get("x1", 0))),
@@ -590,6 +708,7 @@ def render_preview(image_path: str, params: Dict, out_path: str) -> None:
 
     inv_x, inv_y = params["inventory_anchor"]
     ship_x, ship_y = params["ship_marker"]
+    ship_click = params.get("ship_row_click", (ship_x, ship_y))
     storage_rows: List[Point] = params.get("storage_rows", [])
     ore_roi: Optional[Rect] = params.get("ore_roi")
     ore_slots: List[Point] = params.get("ore_slots", [])
@@ -601,6 +720,16 @@ def render_preview(image_path: str, params: Dict, out_path: str) -> None:
     # SHIP marker (green)
     cv2.circle(draw, (ship_x, ship_y), 10, (0, 255, 0), -1)
     cv2.putText(draw, "SHIP", (ship_x + 12, ship_y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    cv2.circle(draw, (int(ship_click[0]), int(ship_click[1])), 8, (0, 180, 255), -1)
+    cv2.putText(
+        draw,
+        "SHIP_CLICK",
+        (int(ship_click[0]) + 10, int(ship_click[1]) - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 180, 255),
+        2,
+    )
 
     # Storage rows (yellow)
     for i, (x, y) in enumerate(storage_rows, start=1):
@@ -634,6 +763,8 @@ def print_summary(
 ) -> None:
     inv_x, inv_y = params["inventory_anchor"]
     ship_x, ship_y = params["ship_marker"]
+    ship_click = params.get("ship_row_click", (ship_x, ship_y))
+    ship_search_mode_used = str(params.get("ship_search_mode_used", "unknown"))
     slots_count = layout["ore"]["slots_count"]
     slots_source = params.get("ore_slots_source", "detected")
     detected_count = int(params.get("ore_slots_detected_count", slots_count))
@@ -642,7 +773,9 @@ def print_summary(
     print(f"Image: {params.get('image_path')}")
     print(f"Size:  {params['image_size'][0]}x{params['image_size'][1]}")
     print(f"INV:   ({inv_x}, {inv_y})")
-    print(f"SHIP:  ({ship_x}, {ship_y})")
+    print(f"SHIP marker: ({ship_x}, {ship_y})")
+    print(f"SHIP click:  ({ship_click[0]}, {ship_click[1]})")
+    print(f"Ship search: {ship_search_mode_used}")
     print(f"Storage rows: {layout['storage']['row_count']} ({params.get('storage_rows_mode', 'estimated')})")
     print(f"Ore point mode: {params.get('ore_point_mode', 'center')}")
     print(f"Ore slots: {slots_count} (source={slots_source}, detected={detected_count})")
@@ -671,12 +804,26 @@ def main() -> None:
         default="auto",
         help="How to build storage rows: parse from image, estimate by fixed step, or auto with fallback",
     )
+    ap.add_argument(
+        "--row-text-offset-x",
+        type=int,
+        default=72,
+        help="Horizontal shift from ship marker to row text center click point",
+    )
+    ap.add_argument(
+        "--ship-search-mode",
+        choices=["auto", "roi", "full"],
+        default="auto",
+        help="Ship marker search strategy: preferred ROI only, full-screen, or auto fallback",
+    )
     args = ap.parse_args()
 
     params = detect_inventory_layout(
         args.image,
         ore_point_mode=args.ore_point_mode,
         storage_row_mode=args.storage_row_mode,
+        row_text_offset_x=args.row_text_offset_x,
+        ship_search_mode=args.ship_search_mode,
     )
     layout = save_layout_json(params, args.out_json, base_resolution=(args.base_w, args.base_h))
     if args.out_ini:
@@ -690,25 +837,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-# ============================================================
-# Colab snippets (copy/paste as needed)
-# ============================================================
-
-# --- (A) Detect + save JSON ---
-# image_path = "Clipboard Image (4 March 2026).jpg"
-# params = detect_inventory_layout(image_path)
-# layout = save_layout_json(params, "layout.json", base_resolution=(1920,1080))
-# print(layout["ore"]["slots_count"], layout["ore"]["slot_fallback"])
-
-# --- (B) Create preview overlay ---
-# render_preview(image_path, params, "layout_preview.png")
-
-# --- (C) If you want matplotlib visualization in Colab ---
-# import matplotlib.pyplot as plt
-# img = cv2.imread("layout_preview.png")
-# img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-# plt.figure(figsize=(12,7))
-# plt.imshow(img)
-# plt.axis("off")

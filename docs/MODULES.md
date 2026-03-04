@@ -101,8 +101,8 @@ This document describes the current `miner.ahk` implementation by modules: logic
    - "too far" banner -> `SELECT`.
 2. Reads active lasers via `CountActiveLasers()`.
 3. If active lasers are sufficient:
-   - periodic ore scan (`ore_scan_interval_ms`) via `TryTransferOre()`;
-   - updates `oreNoTextStreak` in text-scan flow.
+   - periodic ore transfer tick (`ore_scan_interval_ms`) via `TryTransferOre()`;
+   - updates `oreNoTextStreak` as a generic "nothing moved" streak counter.
 4. If partial mode is allowed (`laser_allow_partial`) and at least one laser is active:
    - continues ore flow;
    - retries dead slots less aggressively.
@@ -129,24 +129,11 @@ This document describes the current `miner.ahk` implementation by modules: logic
 - Calls from `DoLaserStage()` and `AttemptLaserFailureRecovery()`.
 
 ### Transfer Modes
-- `TryTransferOre()`:
-  - `slots`: `TryTransferOreBySlots()`;
-  - `text`: `TryTransferOreByTextWithRecovery()`;
-  - `auto`: text first, then slots fallback (if `unload_allow_slot_fallback=1`).
-
-### Text Mode Logic
-- `TryTransferOreByTextWithRecovery()`:
-  - first pass `TryTransferOreByText()`;
-  - if no result and `ship_reanchor_mode=fallback` -> `MaybeReanchorShip()` -> retry once.
-- `TryTransferOreByText()`:
-  - `FocusInventoryWindow()`;
-  - loop up to `ore_transfer_max_per_scan`;
-  - detect ore text with `FindOreTextPixel()` (+ optional `HasOreDigitCluster()`);
-  - drag to `portable_row`;
-  - after each drag, checks laser status and may call `TryActivateLasersBySlots()`.
+- `TryTransferOre()` uses slots-only path: `TryTransferOreBySlots()`.
 
 ### Slots Mode Logic
 - `TryTransferOreBySlots()`:
+  - validates destination (`portable_row`) once;
   - `FocusInventoryWindow()`;
   - iterates `cfg["ore_slots"]`;
   - `DragMouse(slot -> portable_row)` up to `ore_transfer_max_per_scan`.
@@ -181,7 +168,7 @@ This document describes the current `miner.ahk` implementation by modules: logic
 ## 7) Service / Infra Utilities
 
 ### Pixel/Color
-- `PixelInRect()`, `PixelNearColor()`, `ColorNear()`, `CountColorMatchesInRect()`, `IsColorBrightEnough()`.
+- `PixelInRect()`, `PixelNearColor()`, `ColorNear()`, `CountColorMatchesInRect()`.
 
 ### Mouse/Input
 - `LeftClick()`, `RightClick()`, `DragMouse()`, `ShowClickMarker()`.

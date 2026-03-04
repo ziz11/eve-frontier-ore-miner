@@ -4,9 +4,10 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 
 ## Notes
 - Source of truth: `miner.ahk` (`LoadConfig()` and `ApplyLayoutOverrides()`).
-- `ore_transfer_mode` is currently hardcoded to `slots` in code.
+- Ore transfer path is slots-only (`TryTransferOreBySlots()`).
 - Backward compatibility alias exists for typo key: `[general] dynamic_lock_ena1`.
 - Telegram values are loaded from `secrets.ini` first, then fallback to `[telegram]` in `config.ini`.
+- Python calibrator covers only inventory layout-related values; target/laser/asteroid points and combat colors remain manual runtime tuning in `config.ini`.
 
 ## [general]
 - `eve_window_title`
@@ -24,19 +25,20 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 - `target_slot_dedupe_radius_px`
 - `target_slot_max_candidates`
 - `dynamic_target_slot_scan_enabled`
-- `target_slot_probe_radius_px`
 - `target_slot_y_search_radius_px`
 - `target_slot_y_search_step_px`
 - `target_slot_x_jitter_px`
 - `target_slot_active_probe_radius_px`
 - `target_slot_click_offset_y`
-- `ore_drag_offset_y`
 - `target_slot_exists_offset_y`
 - `target_slot_exists_probe_radius_px`
 - `debug_click_marker_ms`
-- `ship_reanchor_mode`
+- `inventory_focus_click_enabled`
+  - when enabled, `FocusInventoryWindow()` clicks `ship_row_x/ship_row_y` first, then falls back to `inventory_window_x/y` only if ship row point is unavailable.
 - `drag_duration_ms`
 - `drag_steps`
+- `drag_hold_before_move_ms`
+- `drag_hold_after_move_ms`
 
 ## [layout]
 - `layout_enabled`
@@ -58,13 +60,13 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 - `unload_after_target_select_delay_ms`
 - `unload_block_during_laser`
 - `unload_busy_retry_ms`
-- `unload_allow_slot_fallback`
 - `ore_scan_interval_ms`
 - `ore_scan_no_text_limit`
 - `ore_transfer_max_per_scan`
 - `min_active_lasers_required`
 - `laser_probe_radius_px`
 - `laser_after_target_select_delay_ms`
+- `laser_first_hover_before_click_delay_ms`
 - `laser_first_click_after_target_select_delay_ms`
 - `laser_after_activate_grace_ms`
 - `laser_slot_attempts`
@@ -113,12 +115,6 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 - `laser_active_orange_color`
 - `laser_active_min_hits`
 - `laser_debug_log`
-- `ore_text_color`
-- `ore_text_variation`
-- `ore_cluster_enabled`
-- `ore_cluster_len_px`
-- `ore_cluster_min_hits`
-- `ore_cluster_threshold`
 - `asteroid_marker_color`
 - `color_variation`
 - `laser_color_variation`
