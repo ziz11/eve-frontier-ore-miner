@@ -91,6 +91,47 @@ def clamp_rect(rect: Rect, w: int, h: int) -> Optional[Rect]:
     return (int(x1), int(y1), int(x2), int(y2))
 
 
+def point_to_dict(pt: Point) -> Dict[str, int]:
+    return {"x": int(pt[0]), "y": int(pt[1])}
+
+
+def rect_to_dict(rect: Optional[Rect]) -> Optional[Dict[str, int]]:
+    if rect is None:
+        return None
+    x1, y1, x2, y2 = rect
+    return {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)}
+
+
+def detect_ship_marker_with_mode(
+    img_bgr: np.ndarray,
+    preferred_roi: Rect,
+    full_roi: Rect,
+    ship_search_mode: str,
+) -> Tuple[Optional[Point], str]:
+    mode = str(ship_search_mode).strip().lower()
+    if mode == "roi":
+        return find_ship_marker(img_bgr, preferred_roi), "roi"
+    if mode == "full":
+        return find_ship_marker(img_bgr, full_roi), "full"
+
+    ship = find_ship_marker(img_bgr, preferred_roi)
+    if ship is not None:
+        return ship, "roi"
+    return find_ship_marker(img_bgr, full_roi), "full"
+
+
+def select_storage_rows(
+    parsed_rows: List[Point],
+    estimated_rows: List[Point],
+    storage_row_mode: str,
+) -> Tuple[List[Point], str]:
+    if storage_row_mode == "parsed" and parsed_rows:
+        return parsed_rows, "parsed"
+    if storage_row_mode == "auto" and len(parsed_rows) >= 2:
+        return parsed_rows, "parsed"
+    return estimated_rows, "estimated"
+
+
 # ---------------------------
 # 1) Ship marker detection
 # ---------------------------
@@ -393,7 +434,107 @@ def detect_ore_slots(img_bgr: np.ndarray, ore_roi: Rect, point_mode: str = "cent
 
 
 # ---------------------------
-# 3) Fallback slot (when ore absent)
+# 3) Target slot detection
+# ---------------------------
+
+def detect_target_slots(
+    img_bgr: np.ndarray,
+    search_roi: Optional[Rect] = None,
+    max_slots: int = 3,
+) -> List[Point]:
+    """
+    Simple target detector for top-right HUD:
+    ROI -> grayscale -> blur -> HoughCircles -> radius filter -> dedupe -> sort.
+    """
+    h, w = img_bgr.shape[:2]
+    if search_roi is None:
+        # 3x3 grid: top-right cell (top-right 1/9 screen).
+        search_roi = clamp_rect((int(w * (2.0 / 3.0)), 0, int(w), int(h / 3.0)), w, h)
+    if search_roi is None:
+        return []
+
+    x1, y1, x2, y2 = search_roi
+    roi = img_bgr[y1:y2, x1:x2]
+    if roi.size == 0:
+        return []
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (9, 9), 1.6)
+    edges = cv2.Canny(blur, 50, 150)
+
+    base_height = 1080.0
+    scale = float(h) / base_height
+    min_radius = int(max(10, round(20.0 * scale)))
+    max_radius = int(max(min_radius + 6, round(80.0 * scale)))
+    min_dist = int(max(20, round(40.0 * scale)))
+    dedupe_spacing = int(max(36, round(80.0 * scale)))
+    horizontal_threshold = int(max(12, round(40.0 * scale)))
+
+    circles = cv2.HoughCircles(
+        edges,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=min_dist,
+        param1=120,
+        param2=22,
+        minRadius=min_radius,
+        maxRadius=max_radius,
+    )
+    if circles is None:
+        return []
+
+    raw = np.round(circles[0]).astype(int)
+    candidates: List[Tuple[int, int, int]] = []
+    y_min = int(h * 0.04)
+    y_max = int(h * 0.26)
+    for cx, cy, r in raw:
+        if r < min_radius or r > max_radius:
+            continue
+        abs_x = int(cx + x1)
+        abs_y = int(cy + y1)
+        if abs_x < 0 or abs_x >= w or abs_y < 0 or abs_y >= h:
+            continue
+        if abs_y < y_min or abs_y > y_max:
+            continue
+        candidates.append((abs_x, abs_y, int(r)))
+
+    if not candidates:
+        return []
+
+    if len(candidates) > 1:
+        ys = np.array([int(c[1]) for c in candidates], dtype=np.int32)
+        median_y = int(np.median(ys))
+        candidates = [c for c in candidates if abs(int(c[1]) - median_y) < horizontal_threshold]
+        if not candidates:
+            return []
+
+    # Keep larger circles first, then remove near-duplicates.
+    candidates.sort(key=lambda t: t[2], reverse=True)
+    deduped: List[Point] = []
+    spacing_sq = float(dedupe_spacing * dedupe_spacing)
+    for cx, cy, _ in candidates:
+        keep = True
+        for ex, ey in deduped:
+            dx = float(cx - ex)
+            dy = float(cy - ey)
+            if (dx * dx + dy * dy) < spacing_sq:
+                keep = False
+                break
+        if keep:
+            deduped.append((int(cx), int(cy)))
+
+    deduped.sort(key=lambda p: p[0])
+    return [clamp_point(p, w, h) for p in deduped[: max(0, int(max_slots))]]
+
+
+def compute_target_region_from_slots(target_slots: List[Point], image_size: Tuple[int, int]) -> Optional[Rect]:
+    w, h = image_size
+    # 3x3 grid: top-right cell.
+    return clamp_rect((int(w * (2.0 / 3.0)), 0, int(w), int(h / 3.0)), w, h)
+
+
+# ---------------------------
+# 4) Fallback slot (when ore absent)
 # ---------------------------
 
 def compute_fallback_ore_slot(params: Dict) -> Point:
@@ -451,7 +592,7 @@ def detect_inventory_layout(
     image_path: str,
     ore_point_mode: str = "center",
     storage_row_mode: str = "auto",
-    row_text_offset_x: int = 72,
+    row_text_offset_x: int = 40,
     ship_search_mode: str = "auto",
 ) -> Dict:
     """
@@ -461,6 +602,7 @@ def detect_inventory_layout(
       - storage_rows (estimated)
       - ore_roi (first row area)
       - ore_slots (detected by contouring inside ore_roi)
+      - target_slots + target_region (detected in top-right HUD)
 
     Returns dict 'params' for downstream steps (visualization / JSON export).
     """
@@ -474,22 +616,12 @@ def detect_inventory_layout(
     preferred_roi: Rect = (int(w * 0.60), int(h * 0.60), int(w * 0.995), int(h * 0.99))
     full_roi: Rect = (0, 0, int(w), int(h))
 
-    ship = None
-    ship_search_mode_used = "none"
-    mode = str(ship_search_mode).strip().lower()
-    if mode == "roi":
-        ship = find_ship_marker(img, preferred_roi)
-        ship_search_mode_used = "roi"
-    elif mode == "full":
-        ship = find_ship_marker(img, full_roi)
-        ship_search_mode_used = "full"
-    else:
-        ship = find_ship_marker(img, preferred_roi)
-        if ship is not None:
-            ship_search_mode_used = "roi"
-        else:
-            ship = find_ship_marker(img, full_roi)
-            ship_search_mode_used = "full"
+    ship, ship_search_mode_used = detect_ship_marker_with_mode(
+        img,
+        preferred_roi,
+        full_roi,
+        ship_search_mode,
+    )
 
     if ship is None:
         raise RuntimeError(
@@ -508,20 +640,11 @@ def detect_inventory_layout(
 
     parsed_storage_rows = detect_storage_rows_from_profile(img, ship, target_x=row_click_x)
     estimated_storage_rows = estimate_storage_rows(ship, target_x=row_click_x)
-    storage_rows_mode_used = "estimated"
-    storage_rows = estimated_storage_rows
-
-    if storage_row_mode == "parsed":
-        if parsed_storage_rows:
-            storage_rows = parsed_storage_rows
-            storage_rows_mode_used = "parsed"
-    elif storage_row_mode == "auto":
-        # Auto uses parsed rows only when signal is strong enough.
-        if len(parsed_storage_rows) >= 2:
-            storage_rows = parsed_storage_rows
-            storage_rows_mode_used = "parsed"
-    else:
-        storage_rows_mode_used = "estimated"
+    storage_rows, storage_rows_mode_used = select_storage_rows(
+        parsed_storage_rows,
+        estimated_storage_rows,
+        storage_row_mode,
+    )
 
     # Ore ROI: first row area (relative to inv anchor), widened to avoid clipping first tile.
     ore_roi = clamp_rect((int(inv_x + 140), int(inv_y + 20), int(inv_x + 470), int(inv_y + 170)), w, h)
@@ -541,6 +664,10 @@ def detect_inventory_layout(
     ore_slots = [clamp_point(p, w, h) for p in ore_slots]
     storage_rows = [clamp_point(p, w, h) for p in storage_rows]
 
+    target_slots = detect_target_slots(img)
+    target_slots = [clamp_point(p, w, h) for p in target_slots]
+    target_region = compute_target_region_from_slots(target_slots, (w, h))
+
     params = {
         "image_path": str(image_path),
         "image_size": (int(w), int(h)),
@@ -558,6 +685,10 @@ def detect_inventory_layout(
         "ore_slots_synthesized_count": int(len(synthesized_ore_slots)),
         "ore_slots_source": ore_slots_source,
         "ore_point_mode": ore_point_mode,
+        "target_slots": target_slots,
+        "target_slots_count": int(len(target_slots)),
+        "target_slots_source": "detected",
+        "target_region": target_region,
     }
     return params
 
@@ -573,6 +704,7 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
       - inventory anchor + ship marker
       - storage rows (abs + offsets)
       - ore ROI, slots (abs + offsets)
+      - target region + target slots for SELECT module
       - ore fallback slot ALWAYS present (for "no ore" case)
     """
     img_w, img_h = params["image_size"]
@@ -589,9 +721,18 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
     ore_slots: List[Point] = params.get("ore_slots", [])
     ore_slots_source = str(params.get("ore_slots_source", "detected"))
     ore_slots_detected_count = int(params.get("ore_slots_detected_count", len(ore_slots)))
+    target_region: Optional[Rect] = params.get("target_region")
+    target_slots: List[Point] = params.get("target_slots", [])
+    target_slots_source = str(params.get("target_slots_source", "detected"))
 
     def to_offset(pt: Point) -> Dict[str, int]:
         return {"dx": int(pt[0] - inv_x), "dy": int(pt[1] - inv_y)}
+
+    def points_to_dict(points: List[Point]) -> List[Dict[str, int]]:
+        return [point_to_dict(p) for p in points]
+
+    def points_to_offset(points: List[Point]) -> List[Dict[str, int]]:
+        return [to_offset(p) for p in points]
 
     fallback_slot = clamp_point(compute_fallback_ore_slot(params), img_w, img_h)
 
@@ -609,27 +750,30 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
             "scale_y": float(scale_y),
         },
         "inventory": {
-            "anchor": {"x": int(inv_x), "y": int(inv_y)},
-            "ship_marker": None if ship_x is None else {"x": int(ship_x), "y": int(ship_y)},
-            "ship_row_click": None if not ship_row_click else {"x": int(ship_row_click[0]), "y": int(ship_row_click[1])},
+            "anchor": point_to_dict((inv_x, inv_y)),
+            "ship_marker": None if ship_x is None else point_to_dict((ship_x, ship_y)),
+            "ship_row_click": None if not ship_row_click else point_to_dict(ship_row_click),
         },
         "storage": {
-            "rows": [{"x": int(x), "y": int(y)} for (x, y) in storage_rows],
-            "rows_offset": [to_offset((x, y)) for (x, y) in storage_rows],
+            "rows": points_to_dict(storage_rows),
+            "rows_offset": points_to_offset(storage_rows),
             "row_count": int(len(storage_rows)),
         },
         "ore": {
-            "roi": None if ore_roi is None else {
-                "x1": int(ore_roi[0]), "y1": int(ore_roi[1]),
-                "x2": int(ore_roi[2]), "y2": int(ore_roi[3]),
-            },
-            "slots": [{"x": int(x), "y": int(y)} for (x, y) in ore_slots],
-            "slots_offset": [to_offset((x, y)) for (x, y) in ore_slots],
+            "roi": rect_to_dict(ore_roi),
+            "slots": points_to_dict(ore_slots),
+            "slots_offset": points_to_offset(ore_slots),
             "slots_count": int(len(ore_slots)),
             "slots_source": ore_slots_source,
             "slots_detected_count": int(ore_slots_detected_count),
-            "slot_fallback": {"x": int(fallback_slot[0]), "y": int(fallback_slot[1])},
+            "slot_fallback": point_to_dict(fallback_slot),
             "slot_fallback_offset": to_offset(fallback_slot),
+        },
+        "targets": {
+            "region": rect_to_dict(target_region),
+            "slots": points_to_dict(target_slots),
+            "slots_count": int(len(target_slots)),
+            "slots_source": target_slots_source,
         },
     }
 
@@ -641,10 +785,7 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
 
 
 def points_to_ini(raw_points: List[Dict[str, int]]) -> str:
-    parts: List[str] = []
-    for p in raw_points:
-        parts.append(f"{int(p['x'])},{int(p['y'])}")
-    return "|".join(parts)
+    return "|".join(f"{int(p['x'])},{int(p['y'])}" for p in raw_points)
 
 
 def save_layout_ini(layout: Dict, out_path: str) -> None:
@@ -653,30 +794,40 @@ def save_layout_ini(layout: Dict, out_path: str) -> None:
       - points/regions overrides
       - full storage row list
       - full detected ore slot list (+ fallback)
+      - detected target region + target slots for SELECT module
     """
     cfg = configparser.ConfigParser()
     cfg.optionxform = str
 
     ship_click = layout["inventory"].get("ship_row_click") or layout["inventory"].get("ship_marker") or {}
     ore_roi = layout["ore"]["roi"] or {}
+    target_region = (layout.get("targets", {}) or {}).get("region") or {}
     storage_rows = layout["storage"]["rows"] or []
     ore_slots = layout["ore"]["slots"] or []
     ore_fallback = layout["ore"]["slot_fallback"]
+    target_slots = (layout.get("targets", {}) or {}).get("slots") or []
 
     cfg["points"] = {
         "ship_row_x": str(int(ship_click.get("x", 0))),
         "ship_row_y": str(int(ship_click.get("y", 0))),
     }
-    cfg["regions"] = {
+    regions: Dict[str, str] = {
         "ore_scan_x1": str(int(ore_roi.get("x1", 0))),
         "ore_scan_y1": str(int(ore_roi.get("y1", 0))),
         "ore_scan_x2": str(int(ore_roi.get("x2", 0))),
         "ore_scan_y2": str(int(ore_roi.get("y2", 0))),
     }
+    if target_region:
+        regions["target_region_x1"] = str(int(target_region.get("x1", 0)))
+        regions["target_region_y1"] = str(int(target_region.get("y1", 0)))
+        regions["target_region_x2"] = str(int(target_region.get("x2", 0)))
+        regions["target_region_y2"] = str(int(target_region.get("y2", 0)))
+    cfg["regions"] = regions
     cfg["lists"] = {
         "layout_storage_rows": points_to_ini(storage_rows),
         "layout_ore_slots": points_to_ini(ore_slots),
         "layout_ore_slot_fallback": f"{int(ore_fallback['x'])},{int(ore_fallback['y'])}",
+        "layout_target_slots": points_to_ini(target_slots),
     }
     cfg["meta"] = {
         "layout_generated_at": layout["meta"]["generated_at"],
@@ -699,6 +850,7 @@ def render_preview(image_path: str, params: Dict, out_path: str) -> None:
       - storage rows S1..S5 (yellow)
       - ore ROI rectangle (magenta)
       - ore slots O1..On (cyan)
+      - target ROI (orange) + target slots T1..Tn
     """
     img = cv2.imread(str(image_path))
     if img is None:
@@ -712,6 +864,8 @@ def render_preview(image_path: str, params: Dict, out_path: str) -> None:
     storage_rows: List[Point] = params.get("storage_rows", [])
     ore_roi: Optional[Rect] = params.get("ore_roi")
     ore_slots: List[Point] = params.get("ore_slots", [])
+    target_region: Optional[Rect] = params.get("target_region")
+    target_slots: List[Point] = params.get("target_slots", [])
 
     # INV anchor (red) - BGR
     cv2.circle(draw, (inv_x, inv_y), 10, (0, 0, 255), -1)
@@ -747,6 +901,15 @@ def render_preview(image_path: str, params: Dict, out_path: str) -> None:
         cv2.circle(draw, (x, y), 8, (255, 255, 0), -1)
         cv2.putText(draw, f"O{i}", (x + 10, y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
+    if target_region:
+        tx1, ty1, tx2, ty2 = target_region
+        cv2.rectangle(draw, (tx1, ty1), (tx2, ty2), (0, 128, 255), 2)
+        cv2.putText(draw, "TARGET ROI", (tx1, max(0, ty1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 128, 255), 2)
+
+    for i, (x, y) in enumerate(target_slots, start=1):
+        cv2.circle(draw, (x, y), 8, (0, 165, 255), -1)
+        cv2.putText(draw, f"T{i}", (x + 10, y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+
     cv2.imwrite(str(out_path), draw)
 
 
@@ -768,6 +931,8 @@ def print_summary(
     slots_count = layout["ore"]["slots_count"]
     slots_source = params.get("ore_slots_source", "detected")
     detected_count = int(params.get("ore_slots_detected_count", slots_count))
+    target_slots_count = int(params.get("target_slots_count", 0))
+    target_slots_source = str(params.get("target_slots_source", "detected"))
 
     print("=== Calibration summary ===")
     print(f"Image: {params.get('image_path')}")
@@ -779,6 +944,7 @@ def print_summary(
     print(f"Storage rows: {layout['storage']['row_count']} ({params.get('storage_rows_mode', 'estimated')})")
     print(f"Ore point mode: {params.get('ore_point_mode', 'center')}")
     print(f"Ore slots: {slots_count} (source={slots_source}, detected={detected_count})")
+    print(f"Target slots: {target_slots_count} (source={target_slots_source})")
     if slots_count == 0:
         fb = layout["ore"]["slot_fallback"]
         print(f"Ore fallback slot: ({fb['x']}, {fb['y']})")
