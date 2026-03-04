@@ -491,17 +491,22 @@ def detect_target_slots(
     min_spacing = int(max(24, round(58.0 * scale)))
     horizontal_threshold = int(max(10, round(24.0 * scale)))
     min_dist = int(max(16, round(min_spacing * 0.8)))
+
+    # Hough runs in detection-space (possibly resized ROI input), so geometry must be scaled too.
+    det_min_radius = int(max(1, round(float(min_radius) * float(roi_scale))))
+    det_max_radius = int(max(det_min_radius + 2, round(float(max_radius) * float(roi_scale))))
+    det_min_dist = int(max(8, round(float(min_dist) * float(roi_scale))))
     click_offset = TARGET_CLICK_OFFSET
 
     circles = cv2.HoughCircles(
         edges,
         cv2.HOUGH_GRADIENT,
         dp=1.2,
-        minDist=min_dist,
+        minDist=det_min_dist,
         param1=120,
         param2=20,
-        minRadius=min_radius,
-        maxRadius=max_radius,
+        minRadius=det_min_radius,
+        maxRadius=det_max_radius,
     )
     if circles is None:
         # Fallback for screenshots where edge map is too sparse.
@@ -509,11 +514,11 @@ def detect_target_slots(
             blur,
             cv2.HOUGH_GRADIENT,
             dp=1.2,
-            minDist=min_dist,
+            minDist=det_min_dist,
             param1=120,
             param2=20,
-            minRadius=min_radius,
-            maxRadius=max_radius,
+            minRadius=det_min_radius,
+            maxRadius=det_max_radius,
         )
     if circles is None:
         return [], []
@@ -565,11 +570,13 @@ def detect_target_slots(
         abs_x = float(x1) + float(cx)
         abs_y = float(y1) + float(cy)
         abs_r = float(r)
-        if not (x1 <= abs_x <= x2 and y1 <= abs_y <= y2):
+        if not (x1 <= abs_x < x2 and y1 <= abs_y < y2):
             raise RuntimeError(
                 "Target circle coordinate transform bug: "
                 f"abs=({abs_x:.2f},{abs_y:.2f}) outside roi=({x1},{y1},{x2},{y2})"
             )
+        assert x1 <= abs_x < x2, f"abs_x transform drift: {abs_x} not in [{x1},{x2})"
+        assert y1 <= abs_y < y2, f"abs_y transform drift: {abs_y} not in [{y1},{y2})"
         if debug:
             print(
                 "[target-debug] circle "
