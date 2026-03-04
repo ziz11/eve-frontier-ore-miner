@@ -9,6 +9,7 @@ dynamic_lock_enabled=1
 asteroid_scan_step_px=10
 asteroid_dedupe_radius_px=26
 asteroid_max_candidates=12
+; Deprecated for direct-click target slots (kept for compatibility, not used in SELECT):
 target_slot_y_search_radius_px=40
 target_slot_y_search_step_px=4
 target_slot_x_jitter_px=10
@@ -118,6 +119,7 @@ inventory_window_y=520
 
 [lists]
 asteroid_points=670,430|760,400|880,340
+; Direct-click points for target selection (x,y). Calibrator layout_target_slots uses the same semantics.
 target_slots=1575,185|1675,185|1775,185
 laser_check_points=710,980|758,980|0,0
 active_laser_slots=1|2

@@ -49,7 +49,7 @@ python eve_inventory_calibrate/eve_inventory_calibrate.py --image "screenshot.jp
    - `[general] target_slot_order=rtl`
    - `[lists] laser_check_points`
    - `[lists] active_laser_slots`
-   - `[lists] target_slots` (manual fallback if calibrator could not detect `layout_target_slots`)
+   - `[lists] target_slots` (manual direct-click fallback if calibrator could not detect `layout_target_slots`)
 6. Run `script.ahk`.
 
 ## Hotkeys (actual from `miner.ahk`)
@@ -60,30 +60,64 @@ python eve_inventory_calibrate/eve_inventory_calibrate.py --image "screenshot.jp
 - `Esc` - exit script.
 
 ## If You Do Not Use Python Calibrator
-Set `layout.layout_enabled=0` in `config.ini`, then fill inventory coordinates manually:
-- `[points] ship_row_x`, `ship_row_y` (click point on Ship row text center)
-- `[points] portable_row_x`, `portable_row_y` (destination storage row text center)
-- `[lists] ore_slots` (source drag points in ore grid)
+Set `layout.layout_enabled=0` in `config.ini`.
 
-Also still required manually (Python does not provide these):
+Then define these exact coordinate params manually:
+- `[points] ship_row_x`
+- `[points] ship_row_y`
+- `[points] portable_row_x`
+- `[points] portable_row_y`
+- `[lists] ore_slots`
+
+Also define these manually (not provided by Python):
 - `[lists] laser_check_points`
 - `[lists] active_laser_slots`
+- `[lists] target_slots` (required for `ASSIST` target select if no layout target slots)
 - `[lists] asteroid_points` (used by `AUTO` lock flow)
 
+Coordinate format rules:
+- Single point key in `[points]`: integer only, example `ship_row_x=244`
+- Point list keys in `[lists]`: `x,y|x,y|x,y` (or one `x,y` per line), integers only
+- `active_laser_slots`: `1|2|3` (slot numbers)
+
+Manual config example:
+```ini
+[layout]
+layout_enabled=0
+
+[points]
+ship_row_x=244
+ship_row_y=540
+portable_row_x=244
+portable_row_y=586
+
+[lists]
+ore_slots=374,556|449,556|524,556
+laser_check_points=710,980|758,980|806,980
+active_laser_slots=1|2|3
+target_slots=1575,185|1675,185|1775,185
+asteroid_points=670,430|760,400|880,340
+```
+
+## Target Slot Semantics
+- `layout_target_slots` from Python calibrator are final direct-click points.
+- Manual `[lists] target_slots` in `config.ini` use the same direct-click semantics.
+- Legacy anchor-based target tuners are deprecated and no longer used by SELECT flow:
+  - `[general] target_slot_click_offset_y`
+  - `[general] target_slot_exists_offset_y`
+  - `[general] target_slot_x_jitter_px`
+  - `[general] target_slot_y_search_radius_px`
+  - `[general] target_slot_y_search_step_px`
+
 ## What Is User-Tuned In AHK (Not In Python)
-These offsets/tuners are from `config.ini` and affect runtime behavior:
-- `[general] target_slot_click_offset_y`
-- `[general] target_slot_exists_offset_y`
-- `[general] target_slot_x_jitter_px`
-- `[general] target_slot_y_search_radius_px`
-- `[general] target_slot_y_search_step_px`
+Runtime tuning remains mostly in:
 - `[timers] target_select_*`
 - `[timers] laser_*`
 - `[timers] unload_*`
 
 ## Python Scope
 Python script calibrates inventory layout (`ship row`, `storage rows`, `ore ROI`, `ore slots`)
-and target-lock layout (`target region`, `target slots` in top-right panel).
+and target-lock layout (`target region`, direct-click `target slots` in top-right panel).
 It still does not auto-mark and does not auto-tune:
 - asteroid lock points
 - laser check points / active laser slot mapping

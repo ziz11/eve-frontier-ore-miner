@@ -64,18 +64,18 @@ This document describes the current `miner.ahk` implementation by modules: logic
 ### Logic
 1. Gets candidates from `GetTargetCandidates()`:
    - uses `cfg["target_slots"]` (preferably from `layout_target_slots` via layout override).
+   - each point is a final direct-click coordinate.
 2. Sorts candidates via `SortTargetPoints()` according to `target_slot_order` (`rtl/ltr`).
 3. For each candidate:
-   - resolves slot anchor: `GetSlotAnchor()` + `HasSlotWhiteBelow()`;
-   - calculates click point: `GetSlotClickPoint()`;
-   - clicks and waits for confirmation: `WaitForActiveTarget(...)`.
+   - clicks the point directly;
+   - waits for confirmation: `WaitForActiveTarget(...)`.
 4. On success stores `lastSelectedSlotX/Y`, `lastTargetSelectedTick`.
 5. If slots were tried but none activated -> `StopWithError("TARGET LOCK failed...")`.
 
 ### Internal Call Path
 - `GetTargetCandidates()` -> `SortTargetPoints()`.
 - `WaitForActiveTarget()` -> `SlotHasActiveTarget()` / `HasActiveTargetOrange()`.
-- `SlotHasActiveTarget()` -> `GetSlotClickPoint()`, `CountColorMatchesInRect()`.
+- `SlotHasActiveTarget()` -> `CountColorMatchesInRect()` around the same direct-click point.
 
 ### Output
 - `true`: `MainLoop` moves to `LASER`.

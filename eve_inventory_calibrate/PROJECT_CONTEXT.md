@@ -32,7 +32,7 @@ Python produces `layout.json` and `config.layout.ini` with coordinates and offse
   2) computes inventory anchor from stable offsets,
   3) builds storage row centers (`auto`/`parsed`/`estimated`),
   4) detects ore icon centers in `ore_roi` (contour-based),
-  5) detects target slot centers in top-right HUD (circle-based),
+  5) detects target circles in top-right HUD and outputs lower-arc direct-click points,
   6) writes `layout.json`,
   7) writes `config.layout.ini` for AHK overrides,
   8) optionally writes `layout_preview.png`.
@@ -62,6 +62,7 @@ Runtime selection:
 - ore source slots = selected indices from `layout_ore_slots`,
 - fallback = `layout_ore_slot_fallback` when detected list is empty,
 - target select candidates = `layout_target_slots` when available.
+  These points are final direct-click coordinates (same semantics as manual `target_slots`).
 
 ## Current Heuristics
 

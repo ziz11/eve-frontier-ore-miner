@@ -48,6 +48,8 @@ import numpy as np
 
 Point = Tuple[int, int]
 Rect = Tuple[int, int, int, int]
+TARGET_MAX_SLOTS = 3
+TARGET_CLICK_OFFSET = 0.90
 
 
 # ---------------------------
@@ -440,35 +442,38 @@ def detect_ore_slots(img_bgr: np.ndarray, ore_roi: Rect, point_mode: str = "cent
 def detect_target_slots(
     img_bgr: np.ndarray,
     search_roi: Optional[Rect] = None,
-    max_slots: int = 3,
-) -> List[Point]:
+) -> Tuple[List[Point], List[Tuple[int, int, int]]]:
     """
-    Simple target detector for top-right HUD:
-    ROI -> grayscale -> blur -> HoughCircles -> radius filter -> dedupe -> sort.
+    Detect target circles in top-right HUD and return lowest click points.
+
+    Returns:
+      - click points in absolute screen coordinates (left-to-right)
+      - detected circles as absolute (cx, cy, r) for preview overlay
     """
     h, w = img_bgr.shape[:2]
     if search_roi is None:
         # 3x3 grid: top-right cell (top-right 1/9 screen).
         search_roi = clamp_rect((int(w * (2.0 / 3.0)), 0, int(w), int(h / 3.0)), w, h)
     if search_roi is None:
-        return []
+        return [], []
 
     x1, y1, x2, y2 = search_roi
     roi = img_bgr[y1:y2, x1:x2]
     if roi.size == 0:
-        return []
+        return [], []
 
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (9, 9), 1.6)
     edges = cv2.Canny(blur, 50, 150)
 
-    base_height = 1080.0
-    scale = float(h) / base_height
-    min_radius = int(max(10, round(20.0 * scale)))
-    max_radius = int(max(min_radius + 6, round(80.0 * scale)))
-    min_dist = int(max(20, round(40.0 * scale)))
-    dedupe_spacing = int(max(36, round(80.0 * scale)))
-    horizontal_threshold = int(max(12, round(40.0 * scale)))
+    # Scale geometry-dependent thresholds by image height.
+    scale = float(h) / 1080.0
+    min_radius = int(max(8, round(18.0 * scale)))
+    max_radius = int(max(min_radius + 6, round(84.0 * scale)))
+    min_spacing = int(max(24, round(58.0 * scale)))
+    horizontal_threshold = int(max(10, round(24.0 * scale)))
+    min_dist = int(max(16, round(min_spacing * 0.8)))
+    click_offset = TARGET_CLICK_OFFSET
 
     circles = cv2.HoughCircles(
         edges,
@@ -476,62 +481,74 @@ def detect_target_slots(
         dp=1.2,
         minDist=min_dist,
         param1=120,
-        param2=22,
+        param2=20,
         minRadius=min_radius,
         maxRadius=max_radius,
     )
     if circles is None:
-        return []
+        # Fallback for screenshots where edge map is too sparse.
+        circles = cv2.HoughCircles(
+            blur,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=min_dist,
+            param1=120,
+            param2=20,
+            minRadius=min_radius,
+            maxRadius=max_radius,
+        )
+    if circles is None:
+        return [], []
 
     raw = np.round(circles[0]).astype(int)
-    candidates: List[Tuple[int, int, int]] = []
-    y_min = int(h * 0.04)
-    y_max = int(h * 0.26)
+    candidates: List[Tuple[int, int, int]] = []  # ROI-local (cx, cy, r)
     for cx, cy, r in raw:
         if r < min_radius or r > max_radius:
             continue
-        abs_x = int(cx + x1)
-        abs_y = int(cy + y1)
-        if abs_x < 0 or abs_x >= w or abs_y < 0 or abs_y >= h:
+        if cx < 0 or cx >= (x2 - x1) or cy < 0 or cy >= (y2 - y1):
             continue
-        if abs_y < y_min or abs_y > y_max:
-            continue
-        candidates.append((abs_x, abs_y, int(r)))
+        candidates.append((int(cx), int(cy), int(r)))
 
     if not candidates:
-        return []
+        return [], []
 
-    row_y: Optional[int] = None
-    if len(candidates) > 1:
-        ys = np.array([int(c[1]) for c in candidates], dtype=np.int32)
-        median_y = int(np.median(ys))
-        row_y = median_y
-        candidates = [c for c in candidates if abs(int(c[1]) - median_y) < horizontal_threshold]
-        if not candidates:
-            return []
-    else:
-        row_y = int(candidates[0][1])
+    ys = np.array([int(c[1]) for c in candidates], dtype=np.int32)
+    median_y = int(np.median(ys))
+    candidates = [c for c in candidates if abs(int(c[1]) - median_y) < horizontal_threshold]
+    if not candidates:
+        return [], []
 
     # Keep larger circles first, then remove near-duplicates.
     candidates.sort(key=lambda t: t[2], reverse=True)
-    deduped: List[Point] = []
-    spacing_sq = float(dedupe_spacing * dedupe_spacing)
-    for cx, cy, _ in candidates:
+    deduped: List[Tuple[int, int, int]] = []
+    spacing_sq = float(min_spacing * min_spacing)
+    for cx, cy, r in candidates:
         keep = True
-        for ex, ey in deduped:
+        for ex, ey, _ in deduped:
             dx = float(cx - ex)
             dy = float(cy - ey)
             if (dx * dx + dy * dy) < spacing_sq:
                 keep = False
                 break
         if keep:
-            deduped.append((int(cx), int(cy)))
+            deduped.append((int(cx), int(cy), int(r)))
 
-    if row_y is not None and deduped:
-        deduped = [(int(x), int(row_y)) for x, _ in deduped]
+    deduped.sort(key=lambda c: c[0])
+    deduped = deduped[:TARGET_MAX_SLOTS]
 
-    deduped.sort(key=lambda p: p[0])
-    return [clamp_point(p, w, h) for p in deduped[: max(0, int(max_slots))]]
+    roi_h = max(1, y2 - y1)
+    click_points: List[Point] = []
+    abs_circles: List[Tuple[int, int, int]] = []
+    for cx, cy, r in deduped:
+        click_x = int(cx)
+        # Final target point: lower arc of circle (direct-click semantics for AHK).
+        click_y = int(cy + round(float(r) * click_offset))
+        click_y = clamp_int(click_y, 0, roi_h - 1)
+        abs_pt = clamp_point((int(x1 + click_x), int(y1 + click_y)), w, h)
+        click_points.append(abs_pt)
+        abs_circles.append((int(x1 + cx), int(y1 + cy), int(r)))
+
+    return click_points, abs_circles
 
 
 def compute_target_region_from_slots(target_slots: List[Point], image_size: Tuple[int, int]) -> Optional[Rect]:
@@ -609,7 +626,7 @@ def detect_inventory_layout(
       - storage_rows (estimated)
       - ore_roi (first row area)
       - ore_slots (detected by contouring inside ore_roi)
-      - target_slots + target_region (detected in top-right HUD)
+      - target slots click points + target region (detected in top-right HUD)
 
     Returns dict 'params' for downstream steps (visualization / JSON export).
     """
@@ -671,7 +688,7 @@ def detect_inventory_layout(
     ore_slots = [clamp_point(p, w, h) for p in ore_slots]
     storage_rows = [clamp_point(p, w, h) for p in storage_rows]
 
-    target_slots = detect_target_slots(img)
+    target_slots, target_circles = detect_target_slots(img)
     target_slots = [clamp_point(p, w, h) for p in target_slots]
     target_region = compute_target_region_from_slots(target_slots, (w, h))
 
@@ -696,6 +713,7 @@ def detect_inventory_layout(
         "target_slots_count": int(len(target_slots)),
         "target_slots_source": "detected",
         "target_region": target_region,
+        "target_circles": target_circles,
     }
     return params
 
@@ -795,6 +813,10 @@ def points_to_ini(raw_points: List[Dict[str, int]]) -> str:
     return "|".join(f"{int(p['x'])},{int(p['y'])}" for p in raw_points)
 
 
+def points_to_ini_lines(raw_points: List[Dict[str, int]]) -> str:
+    return "\n".join(f"{int(p['x'])},{int(p['y'])}" for p in raw_points)
+
+
 def save_layout_ini(layout: Dict, out_path: str) -> None:
     """
     Writes config.layout.ini consumed by AHK:
@@ -834,7 +856,7 @@ def save_layout_ini(layout: Dict, out_path: str) -> None:
         "layout_storage_rows": points_to_ini(storage_rows),
         "layout_ore_slots": points_to_ini(ore_slots),
         "layout_ore_slot_fallback": f"{int(ore_fallback['x'])},{int(ore_fallback['y'])}",
-        "layout_target_slots": points_to_ini(target_slots),
+        "layout_target_slots": points_to_ini_lines(target_slots),
     }
     cfg["meta"] = {
         "layout_generated_at": layout["meta"]["generated_at"],
@@ -873,6 +895,7 @@ def render_preview(image_path: str, params: Dict, out_path: str) -> None:
     ore_slots: List[Point] = params.get("ore_slots", [])
     target_region: Optional[Rect] = params.get("target_region")
     target_slots: List[Point] = params.get("target_slots", [])
+    target_circles: List[Tuple[int, int, int]] = params.get("target_circles", [])
 
     # INV anchor (red) - BGR
     cv2.circle(draw, (inv_x, inv_y), 10, (0, 0, 255), -1)
@@ -913,6 +936,11 @@ def render_preview(image_path: str, params: Dict, out_path: str) -> None:
         cv2.rectangle(draw, (tx1, ty1), (tx2, ty2), (0, 128, 255), 2)
         cv2.putText(draw, "TARGET ROI", (tx1, max(0, ty1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 128, 255), 2)
 
+    # Detected target circles (outline).
+    for cx, cy, r in target_circles:
+        cv2.circle(draw, (int(cx), int(cy)), int(r), (0, 100, 255), 2)
+
+    # Target click points (lower arc of each circle).
     for i, (x, y) in enumerate(target_slots, start=1):
         cv2.circle(draw, (x, y), 8, (0, 165, 255), -1)
         cv2.putText(draw, f"T{i}", (x + 10, y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)

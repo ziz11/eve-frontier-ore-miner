@@ -9,6 +9,41 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 - Telegram values are loaded from `secrets.ini` first, then fallback to `[telegram]` in `config.ini`.
 - Python calibrator covers only inventory layout-related values; target/laser/asteroid points and combat colors remain manual runtime tuning in `config.ini`.
 
+## Manual Coordinate Contract (No Python Calibrator)
+- Set `[layout] layout_enabled=0`.
+- You must manually define:
+  - `[points] ship_row_x`
+  - `[points] ship_row_y`
+  - `[points] portable_row_x`
+  - `[points] portable_row_y`
+  - `[lists] ore_slots`
+  - `[lists] laser_check_points`
+  - `[lists] active_laser_slots`
+  - `[lists] target_slots`
+  - `[lists] asteroid_points`
+- Format:
+  - single point values in `[points]` are integers.
+  - list point values in `[lists]` use `x,y|x,y|x,y` (newline-separated `x,y` is also accepted).
+  - laser slot list uses `1|2|3` (integer indices).
+- Example:
+```ini
+[layout]
+layout_enabled=0
+
+[points]
+ship_row_x=244
+ship_row_y=540
+portable_row_x=244
+portable_row_y=586
+
+[lists]
+ore_slots=374,556|449,556|524,556
+laser_check_points=710,980|758,980|806,980
+active_laser_slots=1|2|3
+target_slots=1575,185|1675,185|1775,185
+asteroid_points=670,430|760,400|880,340
+```
+
 ## [general]
 - `eve_window_title`
 - `main_loop_ms`
@@ -29,6 +64,7 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 - `target_slot_click_offset_y`
 - `target_slot_exists_offset_y`
 - `target_slot_exists_probe_radius_px`
+- Deprecated for direct-click target slots: `target_slot_y_search_radius_px`, `target_slot_y_search_step_px`, `target_slot_x_jitter_px`, `target_slot_click_offset_y`, `target_slot_exists_offset_y`, `target_slot_exists_probe_radius_px`.
 - `debug_click_marker_ms`
 - `inventory_focus_click_enabled`
   - when enabled, `FocusInventoryWindow()` clicks `ship_row_x/ship_row_y` first, then falls back to `inventory_window_x/y` only if ship row point is unavailable.
@@ -133,7 +169,7 @@ Full list of config keys used by `LoadConfig()` in `miner.ahk`.
 
 ## [lists]
 - `asteroid_points`
-- `target_slots`
+- `target_slots` (direct-click points for SELECT; same semantics as `layout_target_slots`)
 - `laser_check_points`
 - `active_laser_slots`
 - `ore_slots`
@@ -167,4 +203,4 @@ When `[layout] layout_enabled=1`, extra keys are read from `layout_ini_path`:
 - `layout_storage_rows`
 - `layout_ore_slots`
 - `layout_ore_slot_fallback`
-- `layout_target_slots`
+- `layout_target_slots` (direct-click points for SELECT; same semantics as manual `target_slots`)

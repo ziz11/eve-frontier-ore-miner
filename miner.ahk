@@ -253,29 +253,20 @@ SelectTopRightTarget() {
     candidates := GetTargetCandidates()
     triedAnySlot := false
     for p in candidates {
-        anchor := GetSlotAnchor(p[1], p[2])
-        if anchor.Length < 2 {
-            Debug("select skip empty slot x=" p[1] " y=" p[2])
-            continue
-        }
-        clickPoint := GetSlotClickPoint(anchor[1], anchor[2])
-        if clickPoint.Length < 2 {
-            Debug("select skip slot no click point x=" anchor[1] " y=" anchor[2])
-            continue
-        }
+        clickPoint := [p[1], p[2]]
         triedAnySlot := true
 
         attempt := 1
         maxAttempts := cfg["target_select_slot_attempts"]
         while attempt <= maxAttempts {
-            Debug("select try slot anchor=" anchor[1] "," anchor[2] " click=" clickPoint[1] "," clickPoint[2] " (base " p[1] "," p[2] ") attempt=" attempt "/" maxAttempts)
-            preActive := SlotHasActiveTarget(anchor[1], anchor[2])
+            Debug("select try slot click=" clickPoint[1] "," clickPoint[2] " attempt=" attempt "/" maxAttempts)
+            preActive := SlotHasActiveTarget(clickPoint[1], clickPoint[2])
             LeftClick clickPoint[1], clickPoint[2]
             Sleep cfg["target_select_settle_ms"]
-            if WaitForActiveTarget(anchor[1], anchor[2], preActive) {
-                Debug("select success anchor=" anchor[1] "," anchor[2] " attempt=" attempt)
-                lastSelectedSlotX := anchor[1]
-                lastSelectedSlotY := anchor[2]
+            if WaitForActiveTarget(clickPoint[1], clickPoint[2], preActive) {
+                Debug("select success click=" clickPoint[1] "," clickPoint[2] " attempt=" attempt)
+                lastSelectedSlotX := clickPoint[1]
+                lastSelectedSlotY := clickPoint[2]
                 lastTargetSelectedTick := A_TickCount
                 return true
             }
@@ -285,7 +276,7 @@ SelectTopRightTarget() {
             attempt += 1
         }
 
-        Debug("select slot failed anchor=" anchor[1] "," anchor[2] " attempts=" maxAttempts)
+        Debug("select slot failed click=" clickPoint[1] "," clickPoint[2] " attempts=" maxAttempts)
     }
 
     if triedAnySlot {
@@ -341,6 +332,7 @@ DedupeTargetCandidates(points) {
     if minSpacing < 1 {
         minSpacing := 1
     }
+    yTolerance := Integer(Max(12, Floor(minSpacing / 2)))
 
     out := []
     for p in points {
@@ -350,7 +342,7 @@ DedupeTargetCandidates(points) {
         }
 
         last := out[out.Length]
-        if Abs(p[1] - last[1]) < minSpacing && Abs(p[2] - last[2]) <= cfg["target_slot_y_search_radius_px"] {
+        if Abs(p[1] - last[1]) < minSpacing && Abs(p[2] - last[2]) <= yTolerance {
             last[1] := Integer((last[1] + p[1]) / 2)
             last[2] := Integer((last[2] + p[2]) / 2)
             out[out.Length] := last
@@ -364,6 +356,8 @@ DedupeTargetCandidates(points) {
 }
 
 GetSlotAnchor(x, y) {
+    ; Deprecated helper kept for backward compatibility/debug.
+    ; SELECT path now uses direct click points from cfg["target_slots"].
     if HasSlotWhiteBelow(x, y) {
         return [x, y]
     }
@@ -391,11 +385,13 @@ GetSlotAnchor(x, y) {
 }
 
 GetSlotClickPoint(anchorX, anchorY) {
+    ; Deprecated helper for legacy anchor-based flow.
     clickY := anchorY - cfg["target_slot_click_offset_y"]
     return [anchorX, clickY]
 }
 
 HasSlotWhiteBelow(anchorX, anchorY) {
+    ; Deprecated helper for legacy anchor-based flow.
     y := anchorY + cfg["target_slot_exists_offset_y"]
     r := cfg["target_slot_exists_probe_radius_px"]
     return PixelInRect(
@@ -439,22 +435,13 @@ WaitForActiveTarget(slotX := 0, slotY := 0, preActive := false) {
 }
 
 SlotHasActiveTarget(x, y) {
-    if !HasSlotWhiteBelow(x, y) {
-        return false
-    }
-
-    p := GetSlotClickPoint(x, y)
-    if p.Length < 2 {
-        return false
-    }
-
     r := cfg["target_slot_active_probe_radius_px"]
     sampleColor := 0
     sampleX := 0
     sampleY := 0
     hitCount := CountColorMatchesInRect(
-        p[1] - r, p[2] - r,
-        p[1] + r, p[2] + r,
+        x - r, y - r,
+        x + r, y + r,
         cfg["target_active_orange_color"], cfg["target_active_color_variation"],
         cfg["target_active_min_hits"],
         &sampleColor, &sampleX, &sampleY
@@ -463,8 +450,7 @@ SlotHasActiveTarget(x, y) {
 
     if cfg["debug_enabled"] && cfg["target_active_debug_log"] {
         Debug(
-            "active-check slot=" x "," y
-            " click=" p[1] "," p[2]
+            "active-check click=" x "," y
             " hits=" hitCount "/" cfg["target_active_min_hits"]
             " sample=" Format("0x{:06X}", sampleColor)
             " at=" sampleX "," sampleY
@@ -1385,7 +1371,10 @@ ParsePoints(raw) {
         return out
     }
 
-    parts := StrSplit(raw, "|")
+    normalized := StrReplace(raw, "`r`n", "|")
+    normalized := StrReplace(normalized, "`n", "|")
+    normalized := StrReplace(normalized, "`r", "|")
+    parts := StrSplit(normalized, "|")
     for _, p in parts {
         token := Trim(p)
         if token = "" {
