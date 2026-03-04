@@ -6,7 +6,7 @@ SetWorkingDir A_ScriptDir
 
 global cfg := Map()
 global running := false
-global state := "LOCK"
+global state := "SELECT"
 global runMode := "AUTO"
 global lastUnloadTick := 0
 global nextUnloadTick := 0
@@ -44,7 +44,7 @@ ToggleBot(mode) {
     }
 
     if running {
-        state := (runMode = "AUTO") ? STATE_LOCK : STATE_SELECT
+        state := STATE_SELECT
         lastUnloadTick := A_TickCount
         nextUnloadTick := 0
         ScheduleNextUnload()
@@ -121,8 +121,8 @@ MainLoop() {
     if state = STATE_SELECT {
         if SelectTopRightTarget() {
             SetState(STATE_LASER, "target selected")
-        } else if !HasAnyTopRightTarget() && runMode = "AUTO" {
-            SetState(STATE_LOCK, "no targets left")
+        } else if !HasAnyTopRightTarget() {
+            SetState(STATE_SELECT, "no targets left")
         }
         return
     }
@@ -301,7 +301,7 @@ GetTargetCandidates() {
     if cfg["dynamic_target_slot_scan_enabled"] {
         points := FindDynamicTargetSlots()
         if points.Length > 0 {
-            SortPointsLeftToRight(points)
+            SortTargetPoints(points)
             Debug("select candidates dynamic=" points.Length)
             return points
         }
@@ -313,9 +313,30 @@ GetTargetCandidates() {
     for p in cfg["target_slots"] {
         staticPoints.Push([p[1], p[2]])
     }
-    SortPointsLeftToRight(staticPoints)
+    SortTargetPoints(staticPoints)
     Debug("select candidates static=" staticPoints.Length)
     return staticPoints
+}
+
+SortTargetPoints(points) {
+    SortPointsLeftToRight(points)
+    if cfg["target_slot_order"] = "rtl" {
+        ReversePoints(points)
+    }
+    return points
+}
+
+ReversePoints(points) {
+    left := 1
+    right := points.Length
+    while left < right {
+        tmp := points[left]
+        points[left] := points[right]
+        points[right] := tmp
+        left += 1
+        right -= 1
+    }
+    return points
 }
 
 SlotHasTarget(x, y) {
@@ -474,11 +495,11 @@ ManualOreTransferTest() {
         return
     }
 
-    moved := TryTransferOreByText()
+    moved := TryTransferOre()
     if moved > 0 {
         Debug("manual ore test success moved=" moved)
     } else {
-        Debug("manual ore test no ore found")
+        Debug("manual ore test moved=0")
     }
 }
 
@@ -505,7 +526,7 @@ DoLaserStage() {
     global state, runMode, laserLostTick, lastLaserRetryTick, lastTargetSelectedTick, lastLaserActionTick, lastOreScanTick, oreNoTextStreak
 
     if !HasAnyTopRightTarget() {
-        SetState((runMode = "AUTO") ? STATE_LOCK : STATE_SELECT, "no targets in laser stage")
+        SetState(STATE_SELECT, "no targets in laser stage")
         return
     }
 
@@ -527,10 +548,10 @@ DoLaserStage() {
     if activeCount >= cfg["min_active_lasers_required"] {
         laserLostTick := 0
 
-        ; LASER stage does ore transfer checks by scanning inventory text region.
+        ; LASER stage does periodic ore transfer from configured slot coordinates.
         if lastOreScanTick = 0 || (now - lastOreScanTick) >= cfg["ore_scan_interval_ms"] {
             lastOreScanTick := now
-            moved := TryTransferOreByText()
+            moved := TryTransferOre()
             if moved > 0 {
                 oreNoTextStreak := 0
                 return
@@ -538,15 +559,10 @@ DoLaserStage() {
 
             oreNoTextStreak += 1
             if cfg["debug_enabled"] {
-                Debug("ore scan no text streak=" oreNoTextStreak "/" cfg["ore_scan_no_text_limit"])
+                Debug("ore transfer moved=0 streak=" oreNoTextStreak "/" cfg["ore_scan_no_text_limit"])
             }
-
             if oreNoTextStreak >= cfg["ore_scan_no_text_limit"] {
                 oreNoTextStreak := 0
-                if !HasAnyTopRightTarget() {
-                    SetState((runMode = "AUTO") ? STATE_LOCK : STATE_SELECT, "ore not found and no targets")
-                    return
-                }
                 if CountActiveLasers() < cfg["min_active_lasers_required"] {
                     lastLaserRetryTick := 0
                 }
@@ -562,13 +578,13 @@ DoLaserStage() {
         ; Keep ore flow alive even in partial mode.
         if lastOreScanTick = 0 || (now - lastOreScanTick) >= cfg["ore_scan_interval_ms"] {
             lastOreScanTick := now
-            moved := TryTransferOreByText()
+            moved := TryTransferOre()
             if moved > 0 {
                 oreNoTextStreak := 0
             } else {
                 oreNoTextStreak += 1
                 if cfg["debug_enabled"] {
-                    Debug("ore scan no text streak=" oreNoTextStreak "/" cfg["ore_scan_no_text_limit"] " (partial)")
+                    Debug("ore transfer moved=0 streak=" oreNoTextStreak "/" cfg["ore_scan_no_text_limit"] " (partial)")
                 }
                 if oreNoTextStreak >= cfg["ore_scan_no_text_limit"] {
                     oreNoTextStreak := 0
@@ -782,33 +798,59 @@ TryEmergencyLock() {
 }
 
 DoUnload() {
-    Debug("unload start slots=" cfg["ore_slots"].Length)
-    ; Prefer robust text-based transfer first; static slots stay as fallback.
-    movedByText := 0
-    if cfg["ore_transfer_max_per_scan"] > 0 {
-        movedByText := TryTransferOreByText()
-        if movedByText > 0 {
-            Debug("unload end moved_by_text=" movedByText)
-            return
-        }
-        if !cfg["unload_allow_slot_fallback"] {
-            Debug("unload text transfer found none -> skip (slot fallback disabled)")
-            return
-        }
-        Debug("unload text transfer found none -> fallback slots")
-    }
-    ; Re-anchor inventory context every unload to avoid dragging from wrong pane.
-    FocusInventoryWindow()
-    SelectShipInventory()
+    Debug(
+        "unload start slots=" cfg["ore_slots"].Length
+        " mode=" cfg["ore_transfer_mode"]
+        " ore_scan=" cfg["ore_scan_x1"] "," cfg["ore_scan_y1"] "-" cfg["ore_scan_x2"] "," cfg["ore_scan_y2"]
+        " portable=" cfg["portable_row_x"] "," cfg["portable_row_y"]
+    )
+    moved := TryTransferOre()
+    Debug("unload end moved=" moved)
+}
 
+TryTransferOre() {
+    return TryTransferOreBySlots()
+}
+
+TryTransferOreBySlots() {
+    maxTransfers := cfg["ore_transfer_max_per_scan"]
+    if maxTransfers < 1 {
+        maxTransfers := cfg["ore_slots"].Length
+    }
+
+    FocusInventoryWindow()
+    moved := 0
     for p in cfg["ore_slots"] {
-        ; Some UI interactions can switch pane; force SHIP selection before each drag.
-        SelectShipInventory()
-        Debug("unload drag x=" p[1] " y=" p[2] " -> portable")
+        if moved >= maxTransfers {
+            break
+        }
+        if !IsNumericCoord(p[1]) || !IsNumericCoord(p[2]) {
+            continue
+        }
+        if !IsNumericCoord(cfg["portable_row_x"]) || !IsNumericCoord(cfg["portable_row_y"]) {
+            Debug("portable row invalid coords x=" cfg["portable_row_x"] " y=" cfg["portable_row_y"] " skip slot transfer")
+            break
+        }
+
+        Debug("ore slot drag x=" p[1] " y=" p[2] " -> " cfg["portable_row_x"] "," cfg["portable_row_y"])
         DragMouse p[1], p[2], cfg["portable_row_x"], cfg["portable_row_y"]
         Sleep cfg["ui_delay_ms"]
+        moved += 1
     }
-    Debug("unload end")
+    return moved
+}
+
+TryTransferOreByTextWithRecovery() {
+    moved := TryTransferOreByText()
+    if moved > 0 {
+        return moved
+    }
+    if cfg["ship_reanchor_mode"] = "fallback" {
+        Debug("ore text not found -> reanchor ship and retry once")
+        MaybeReanchorShip("text_retry")
+        return TryTransferOreByText()
+    }
+    return 0
 }
 
 TryTransferOreByText() {
@@ -818,7 +860,6 @@ TryTransferOreByText() {
     }
 
     FocusInventoryWindow()
-    SelectShipInventory()
 
     moved := 0
     i := 1
@@ -848,9 +889,6 @@ TryTransferOreByText() {
         Sleep cfg["ui_delay_ms"]
         moved += 1
 
-        ; Some UI interactions can deselect ship pane; keep it anchored.
-        SelectShipInventory()
-
         ; Keep lasers alive while unloading ore stacks.
         if CountActiveLasers() < cfg["min_active_lasers_required"] {
             Debug("ore transfer detected inactive lasers -> re-activate")
@@ -860,6 +898,14 @@ TryTransferOreByText() {
         i += 1
     }
 
+    if moved = 0 && cfg["debug_enabled"] {
+        Debug(
+            "ore text not found in region="
+            cfg["ore_scan_x1"] "," cfg["ore_scan_y1"] "-" cfg["ore_scan_x2"] "," cfg["ore_scan_y2"]
+            " color=" Format("0x{:06X}", cfg["ore_text_color"])
+            " var=" cfg["ore_text_variation"]
+        )
+    }
     return moved
 }
 
@@ -963,6 +1009,20 @@ FocusInventoryWindow() {
 SelectShipInventory() {
     LeftClick cfg["ship_row_x"], cfg["ship_row_y"]
     Sleep cfg["ui_delay_ms"]
+}
+
+MaybeReanchorShip(reason := "") {
+    mode := cfg["ship_reanchor_mode"]
+    if mode = "always" {
+        Debug("ship reanchor reason=" reason " mode=always")
+        SelectShipInventory()
+        return
+    }
+    if mode = "fallback" {
+        Debug("ship reanchor reason=" reason " mode=fallback")
+        SelectShipInventory()
+        return
+    }
 }
 
 HasAnyTopRightTarget() {
@@ -1132,7 +1192,40 @@ DragMouse(x1, y1, x2, y2) {
     Debug("drag x1=" x1 " y1=" y1 " x2=" x2 " y2=" y2)
     MouseMove x1, y1, 0
     ShowClickMarker("D", x1, y1)
-    MouseClickDrag "Left", x1, y1, x2, y2, 12
+    steps := cfg["drag_steps"]
+    if steps < 2 {
+        steps := 2
+    }
+    durationMs := cfg["drag_duration_ms"]
+    if durationMs < 120 {
+        durationMs := 120
+    }
+    sleepPerStep := Integer(durationMs / steps)
+    if sleepPerStep < 1 {
+        sleepPerStep := 1
+    }
+
+    holdBeforeMs := cfg["drag_hold_before_move_ms"]
+    if holdBeforeMs < 0 {
+        holdBeforeMs := 0
+    }
+    holdAfterMs := cfg["drag_hold_after_move_ms"]
+    if holdAfterMs < 0 {
+        holdAfterMs := 0
+    }
+
+    Click "Down Left"
+    Sleep holdBeforeMs
+    i := 1
+    while i <= steps {
+        nx := Integer(x1 + (x2 - x1) * i / steps)
+        ny := Integer(y1 + (y2 - y1) * i / steps)
+        MouseMove nx, ny, 0
+        Sleep sleepPerStep
+        i += 1
+    }
+    Sleep holdAfterMs
+    Click "Up Left"
 }
 
 IsNumericCoord(value) {
@@ -1181,6 +1274,10 @@ LoadConfig() {
     cfg["ui_delay_ms"] := Integer(IniRead("config.ini", "general", "ui_delay_ms", 250))
     cfg["debug_enabled"] := Integer(IniRead("config.ini", "general", "debug_enabled", 0)) = 1
     cfg["debug_loop_every_ms"] := Integer(IniRead("config.ini", "general", "debug_loop_every_ms", 5000))
+    cfg["target_slot_order"] := StrLower(Trim(IniRead("config.ini", "general", "target_slot_order", "rtl")))
+    if !(cfg["target_slot_order"] = "rtl" || cfg["target_slot_order"] = "ltr") {
+        cfg["target_slot_order"] := "rtl"
+    }
     ; Keep backward compatibility for a common typo key: dynamic_lock_ena1.
     dynRaw := IniRead("config.ini", "general", "dynamic_lock_enabled", "")
     if dynRaw = "" {
@@ -1204,6 +1301,20 @@ LoadConfig() {
     cfg["target_slot_exists_offset_y"] := Integer(IniRead("config.ini", "general", "target_slot_exists_offset_y", 22))
     cfg["target_slot_exists_probe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_exists_probe_radius_px", 5))
     cfg["debug_click_marker_ms"] := Integer(IniRead("config.ini", "general", "debug_click_marker_ms", 0))
+    cfg["ship_reanchor_mode"] := StrLower(Trim(IniRead("config.ini", "general", "ship_reanchor_mode", "off")))
+    if !(cfg["ship_reanchor_mode"] = "off" || cfg["ship_reanchor_mode"] = "fallback" || cfg["ship_reanchor_mode"] = "always") {
+        cfg["ship_reanchor_mode"] := "off"
+    }
+    cfg["ore_transfer_mode"] := "slots"
+    cfg["drag_duration_ms"] := Integer(IniRead("config.ini", "general", "drag_duration_ms", 380))
+    cfg["drag_steps"] := Integer(IniRead("config.ini", "general", "drag_steps", 5))
+    cfg["drag_hold_before_move_ms"] := Integer(IniRead("config.ini", "general", "drag_hold_before_move_ms", 140))
+    cfg["drag_hold_after_move_ms"] := Integer(IniRead("config.ini", "general", "drag_hold_after_move_ms", 35))
+    cfg["layout_enabled"] := Integer(IniRead("config.ini", "layout", "layout_enabled", 1)) = 1
+    cfg["layout_ini_path"] := IniRead("config.ini", "layout", "layout_ini_path", "eve_inventory_calibrate\config.layout.ini")
+    cfg["storage_row_index"] := Integer(IniRead("config.ini", "layout", "storage_row_index", 2))
+    cfg["ore_slot_indices_raw"] := IniRead("config.ini", "layout", "ore_slot_indices", "1|2|3")
+    cfg["ore_slot_indices"] := ParseIntList(cfg["ore_slot_indices_raw"], 1, 99)
 
     cfg["heartbeat_ms"] := Integer(IniRead("config.ini", "timers", "heartbeat_ms", 600000))
     cfg["lock_timeout_ms"] := Integer(IniRead("config.ini", "timers", "lock_timeout_ms", 30000))
@@ -1310,6 +1421,10 @@ LoadConfig() {
     cfg["active_laser_slots"] := ParseIntList(cfg["active_laser_slots_raw"], 1, 9)
     cfg["ore_slots"] := ParsePoints(IniRead("config.ini", "lists", "ore_slots", "374,556|449,556|524,556|374,631|449,631|524,631"))
 
+    if cfg["layout_enabled"] {
+        ApplyLayoutOverrides(cfg["layout_ini_path"])
+    }
+
     if cfg["active_laser_slots"].Length = 0 {
         cfg["active_laser_slots"] := [1, 2]
         cfg["active_laser_slots_raw"] := "1|2"
@@ -1321,6 +1436,70 @@ LoadConfig() {
     if validLaserSlots > 0 && cfg["min_active_lasers_required"] > validLaserSlots {
         cfg["min_active_lasers_required"] := validLaserSlots
     }
+}
+
+ApplyLayoutOverrides(layoutIniPath) {
+    global cfg
+
+    if !FileExist(layoutIniPath) {
+        Debug("layout override ini not found path=" layoutIniPath)
+        return
+    }
+
+    shipXraw := IniRead(layoutIniPath, "points", "ship_row_x", "")
+    shipYraw := IniRead(layoutIniPath, "points", "ship_row_y", "")
+    if shipXraw != "" && shipYraw != "" {
+        cfg["ship_row_x"] := Integer(shipXraw)
+        cfg["ship_row_y"] := Integer(shipYraw)
+    }
+
+    oreX1raw := IniRead(layoutIniPath, "regions", "ore_scan_x1", "")
+    oreY1raw := IniRead(layoutIniPath, "regions", "ore_scan_y1", "")
+    oreX2raw := IniRead(layoutIniPath, "regions", "ore_scan_x2", "")
+    oreY2raw := IniRead(layoutIniPath, "regions", "ore_scan_y2", "")
+    if oreX1raw != "" && oreY1raw != "" && oreX2raw != "" && oreY2raw != "" {
+        cfg["ore_scan_x1"] := Integer(oreX1raw)
+        cfg["ore_scan_y1"] := Integer(oreY1raw)
+        cfg["ore_scan_x2"] := Integer(oreX2raw)
+        cfg["ore_scan_y2"] := Integer(oreY2raw)
+    }
+
+    layoutRows := ParsePoints(IniRead(layoutIniPath, "lists", "layout_storage_rows", ""))
+    layoutOreSlots := ParsePoints(IniRead(layoutIniPath, "lists", "layout_ore_slots", ""))
+    layoutOreFallback := ParsePoints(IniRead(layoutIniPath, "lists", "layout_ore_slot_fallback", ""))
+
+    idx := cfg["storage_row_index"]
+    if idx < 1 {
+        idx := 1
+    }
+    if layoutRows.Length >= idx {
+        cfg["portable_row_x"] := layoutRows[idx][1]
+        cfg["portable_row_y"] := layoutRows[idx][2]
+    } else if layoutRows.Length > 0 {
+        cfg["portable_row_x"] := layoutRows[1][1]
+        cfg["portable_row_y"] := layoutRows[1][2]
+        Debug("layout storage_row_index out of range index=" idx " rows=" layoutRows.Length " using row#1")
+    }
+
+    selectedOreSlots := []
+    if layoutOreSlots.Length > 0 {
+        for _, slotIdx in cfg["ore_slot_indices"] {
+            if slotIdx >= 1 && slotIdx <= layoutOreSlots.Length {
+                selectedOreSlots.Push(layoutOreSlots[slotIdx])
+            }
+        }
+        if selectedOreSlots.Length = 0 {
+            selectedOreSlots.Push(layoutOreSlots[1])
+            Debug("layout ore_slot_indices produced no valid picks, fallback to first detected slot")
+        }
+    } else if layoutOreFallback.Length > 0 {
+        selectedOreSlots.Push(layoutOreFallback[1])
+    }
+    if selectedOreSlots.Length > 0 {
+        cfg["ore_slots"] := selectedOreSlots
+    }
+
+    Debug("layout override applied storage_index=" cfg["storage_row_index"] " selected_ore_slots=" cfg["ore_slots"].Length)
 }
 
 ParsePoints(raw) {

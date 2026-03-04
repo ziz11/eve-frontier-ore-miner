@@ -12,3 +12,10 @@ config.ini
 
 # Local runtime logs
 logs/
+
+# Calibrator outputs/assets (keep code/docs only)
+eve_inventory_calibrate/*.png
+eve_inventory_calibrate/*.jpg
+eve_inventory_calibrate/*.jpeg
+eve_inventory_calibrate/*.json
+eve_inventory_calibrate/*.ini
