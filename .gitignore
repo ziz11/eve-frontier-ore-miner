@@ -1,5 +1,12 @@
 # OS/editor
 .DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.temp
+*.bak
+*.orig
+*~
 
 # Local runtime config and secrets
 secrets.ini
@@ -12,6 +19,7 @@ config.ini
 
 # Local runtime logs
 logs/
+*.log
 
 # Calibrator outputs/assets (keep code/docs only)
 eve_inventory_calibrate/*.png
@@ -19,3 +27,12 @@ eve_inventory_calibrate/*.jpg
 eve_inventory_calibrate/*.jpeg
 eve_inventory_calibrate/*.json
 eve_inventory_calibrate/*.ini
+
+# Python cache/build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

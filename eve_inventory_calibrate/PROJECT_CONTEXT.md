@@ -87,10 +87,15 @@ AHK v2 already uses `IniRead` heavily, so using generated `config.layout.ini` av
 - Inventory anchor can be derived by stable offsets from ship marker:
   - `inv_x = ship_x - 32`
   - `inv_y = ship_y - 65`
-- Storage rows are estimated by a constant row height (`row_h = 25`).
+- Storage rows support 3 modes:
+  - `auto` (default): parse row Y positions from screenshot, fallback to estimated.
+  - `parsed`: parse from screenshot only.
+  - `estimated`: constant row height (`row_h = 25`).
 - Ore ROI is derived from inventory anchor:
   - `ore_roi = (inv_x + 160, inv_y + 25, inv_x + 465, inv_y + 165)`
 - Ore slots are detected by contouring square-ish icons inside `ore_roi`.
+- If no ore icons are detected, tool synthesizes several virtual first-row slots from `ore_roi`
+  and still writes `layout_ore_slot_fallback` for single-point fallback.
 
 ## Future Improvements
 

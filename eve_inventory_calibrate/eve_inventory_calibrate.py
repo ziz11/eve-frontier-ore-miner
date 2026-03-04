@@ -130,17 +130,92 @@ def find_ship_marker(img_bgr: np.ndarray, roi_rect: Rect) -> Optional[Point]:
     return (int(cx), int(cy))
 
 
+def detect_storage_rows_from_profile(
+    img_bgr: np.ndarray,
+    ship_marker: Point,
+    max_rows: int = 8,
+) -> List[Point]:
+    """
+    Detect storage row Y positions below ship marker from the left inventory tree.
+    This captures real gaps (row can be immediately below Ship or with spacing).
+    """
+    ship_x, ship_y = ship_marker
+    h, w = img_bgr.shape[:2]
+
+    # Narrow strip where row bullets/icons are expected in inventory tree.
+    x1 = max(0, ship_x - 18)
+    x2 = min(w, ship_x + 18)
+    y1 = max(0, ship_y + 10)
+    y2 = min(h, ship_y + 220)
+    if x2 <= x1 or y2 <= y1:
+        return []
+
+    roi = img_bgr[y1:y2, x1:x2]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+    sat = hsv[:, :, 1].astype(np.float32) / 255.0
+    val = hsv[:, :, 2].astype(np.float32) / 255.0
+    # Weighted profile: catches both colored and bright row markers.
+    profile = (0.65 * sat + 0.35 * val).mean(axis=1)
+    if profile.size == 0:
+        return []
+
+    smooth = cv2.GaussianBlur(profile.reshape(-1, 1), (1, 5), 0).reshape(-1)
+    threshold = float(np.percentile(smooth, 84))
+
+    raw_peaks: List[Tuple[int, float]] = []
+    for i in range(1, len(smooth) - 1):
+        if smooth[i] >= smooth[i - 1] and smooth[i] > smooth[i + 1] and smooth[i] >= threshold:
+            raw_peaks.append((i, float(smooth[i])))
+
+    # Merge nearby peaks; keep strongest representative.
+    merged: List[Tuple[int, float]] = []
+    for yi, score in raw_peaks:
+        if not merged:
+            merged.append((yi, score))
+            continue
+        prev_y, prev_score = merged[-1]
+        if yi - prev_y <= 10:
+            if score > prev_score:
+                merged[-1] = (yi, score)
+        else:
+            merged.append((yi, score))
+
+    out: List[Point] = []
+    prev_abs_y: Optional[int] = None
+    for yi, _ in merged:
+        abs_y = int(y1 + yi)
+        if prev_abs_y is not None and (abs_y - prev_abs_y) > 70:
+            break
+        out.append((int(ship_x), abs_y))
+        prev_abs_y = abs_y
+        if len(out) >= max_rows:
+            break
+    return out
+
+
+def estimate_storage_rows(ship_marker: Point, row_count: int = 5, row_h: int = 25, first_row_offset: int = 55) -> List[Point]:
+    ship_x, ship_y = ship_marker
+    y0 = ship_y + first_row_offset
+    return [(int(ship_x), int(y0 + row_h * i)) for i in range(row_count)]
+
+
 # ---------------------------
 # 2) Ore icon detection (no OCR)
 # ---------------------------
 
-def detect_ore_slots(img_bgr: np.ndarray, ore_roi: Rect) -> List[Point]:
+def detect_ore_slots(img_bgr: np.ndarray, ore_roi: Rect, point_mode: str = "center") -> List[Point]:
     """
     Detect ore icon centers within ore_roi by contouring square-ish icons.
     Works even if ore digits are absent (no OCR).
 
+    Args:
+      point_mode:
+        - "center": use icon center as slot point
+        - "lower": use lower point inside icon tile (more drag-friendly)
+
     Returns:
-      list of absolute (x,y) centers, sorted top-to-bottom, left-to-right.
+      list of absolute (x,y) slot points, sorted top-to-bottom, left-to-right.
       May be empty.
     """
     x1, y1, x2, y2 = ore_roi
@@ -150,31 +225,84 @@ def detect_ore_slots(img_bgr: np.ndarray, ore_roi: Rect) -> List[Point]:
 
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
+    # Edge map for contour proposals.
     edges = cv2.Canny(gray, 40, 120)
     kernel = np.ones((3, 3), np.uint8)
     edges = cv2.dilate(edges, kernel, iterations=1)
 
     cnts, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    slots: List[Point] = []
+    candidates: List[Tuple[int, int, int, int, int]] = []
+    roi_h, roi_w = roi.shape[:2]
     for c in cnts:
         x, y, w, h = cv2.boundingRect(c)
-        area = w * h
-
-        # Tune if needed: expected icon size range
-        if area < 1500 or area > 20000:
+        box_area = w * h
+        if box_area < 1200 or box_area > 20000:
             continue
 
         aspect = w / max(h, 1)
-        if not (0.70 <= aspect <= 1.40):
+        if not (0.65 <= aspect <= 1.45):
             continue
 
+        # Reject tiny/noisy contours and text fragments.
+        contour_area = float(cv2.contourArea(c))
+        fill_ratio = contour_area / max(box_area, 1)
+        if fill_ratio < 0.18:
+            continue
+
+        edge_density = float(np.count_nonzero(edges[y:y + h, x:x + w])) / max(box_area, 1)
+        if edge_density < 0.05 or edge_density > 0.95:
+            continue
+
+        # Ignore very high items in ROI; ore tiles are usually in lower half.
+        center_y = y + h // 2
+        if center_y < int(roi_h * 0.35):
+            continue
+
+        if x < 0 or y < 0 or x + w > roi_w or y + h > roi_h:
+            continue
+
+        candidates.append((x, y, w, h, box_area))
+
+    if not candidates:
+        return []
+
+    # Keep only boxes near dominant row to avoid accidental lower text picks.
+    ys = sorted([y + h // 2 for x, y, w, h, _ in candidates])
+    median_y = ys[len(ys) // 2]
+    row_filtered = [b for b in candidates if abs((b[1] + b[3] // 2) - median_y) <= 20]
+    if row_filtered:
+        candidates = row_filtered
+
+    # Simple dedupe by center distance; keep larger box when overlapping.
+    candidates.sort(key=lambda b: b[4], reverse=True)
+    deduped: List[Tuple[int, int, int, int, int]] = []
+    for box in candidates:
+        x, y, w, h, area = box
         cx = x + w // 2
         cy = y + h // 2
-        slots.append((int(cx + x1), int(cy + y1)))
+        keep = True
+        for ex, ey, ew, eh, _ in deduped:
+            ecx = ex + ew // 2
+            ecy = ey + eh // 2
+            if abs(cx - ecx) <= 16 and abs(cy - ecy) <= 16:
+                keep = False
+                break
+        if keep:
+            deduped.append(box)
 
     # Keep index order deterministic for AHK config (slot 1..N left->right).
-    slots.sort(key=lambda p: (p[0], p[1]))
+    deduped.sort(key=lambda b: (b[0], b[1]))
+
+    slots: List[Point] = []
+    y_ratio = 0.50 if point_mode == "center" else 0.80
+    for x, y, w, h, _ in deduped:
+        cx = x + w // 2
+        cy = y + int(round(h * y_ratio))
+        if cy >= roi_h:
+            cy = roi_h - 1
+        slots.append((int(cx + x1), int(cy + y1)))
+
     return slots
 
 
@@ -192,21 +320,52 @@ def compute_fallback_ore_slot(params: Dict) -> Point:
     """
     inv_x, inv_y = params["inventory_anchor"]
     ore_roi = params.get("ore_roi")
+    point_mode = str(params.get("ore_point_mode", "center"))
 
     if ore_roi:
         x1, y1, x2, y2 = ore_roi
         fx = x1 + int((x2 - x1) * 0.18)
-        fy = y1 + int((y2 - y1) * 0.35)
+        fy_ratio = 0.50 if point_mode == "center" else 0.57
+        fy = y1 + int((y2 - y1) * fy_ratio)
         return (int(fx), int(fy))
 
     return (int(inv_x + 210), int(inv_y + 80))
+
+
+def synthesize_ore_slots_from_roi(ore_roi: Optional[Rect], point_mode: str = "center", max_slots: int = 4) -> List[Point]:
+    """
+    Build virtual ore slot candidates when no icon was detected.
+    This keeps transfer logic stable even if inventory currently has no ore.
+    """
+    if ore_roi is None:
+        return []
+
+    x1, y1, x2, y2 = ore_roi
+    w = max(1, x2 - x1)
+    h = max(1, y2 - y1)
+
+    y_ratio = 0.52 if point_mode == "center" else 0.60
+    y = int(y1 + h * y_ratio)
+
+    # First row slot anchors: left-to-right spread inside ROI.
+    x_ratios = [0.12, 0.30, 0.48, 0.66, 0.84]
+    out: List[Point] = []
+    for xr in x_ratios:
+        out.append((int(x1 + w * xr), int(y)))
+        if len(out) >= max_slots:
+            break
+    return out
 
 
 # ---------------------------
 # 4) Main detector (returns params dict)
 # ---------------------------
 
-def detect_inventory_layout(image_path: str) -> Dict:
+def detect_inventory_layout(
+    image_path: str,
+    ore_point_mode: str = "center",
+    storage_row_mode: str = "auto",
+) -> Dict:
     """
     Detect layout from screenshot:
       - ship_marker
@@ -240,15 +399,34 @@ def detect_inventory_layout(image_path: str) -> Dict:
     inv_x = ship_x - 32
     inv_y = ship_y - 65
 
-    # Storage rows: estimated step (tune row_h if needed)
-    row_h = 25
-    storage_y0 = ship_y + 55
-    storage_rows: List[Point] = [(ship_x, int(storage_y0 + row_h * i)) for i in range(5)]
+    parsed_storage_rows = detect_storage_rows_from_profile(img, ship)
+    estimated_storage_rows = estimate_storage_rows(ship)
+    storage_rows_mode_used = "estimated"
+    storage_rows = estimated_storage_rows
 
-    # Ore ROI: first row area (relative to inv anchor)
-    ore_roi: Rect = (int(inv_x + 160), int(inv_y + 25), int(inv_x + 465), int(inv_y + 165))
+    if storage_row_mode == "parsed":
+        if parsed_storage_rows:
+            storage_rows = parsed_storage_rows
+            storage_rows_mode_used = "parsed"
+    elif storage_row_mode == "auto":
+        # Auto uses parsed rows only when signal is strong enough.
+        if len(parsed_storage_rows) >= 2:
+            storage_rows = parsed_storage_rows
+            storage_rows_mode_used = "parsed"
+    else:
+        storage_rows_mode_used = "estimated"
 
-    ore_slots = detect_ore_slots(img, ore_roi)
+    # Ore ROI: first row area (relative to inv anchor), widened to avoid clipping first tile.
+    ore_roi: Rect = (int(inv_x + 140), int(inv_y + 20), int(inv_x + 470), int(inv_y + 170))
+
+    detected_ore_slots = detect_ore_slots(img, ore_roi, point_mode=ore_point_mode)
+    synthesized_ore_slots = synthesize_ore_slots_from_roi(ore_roi, point_mode=ore_point_mode, max_slots=4)
+
+    ore_slots_source = "detected"
+    ore_slots = detected_ore_slots
+    if len(ore_slots) == 0 and len(synthesized_ore_slots) > 0:
+        ore_slots = synthesized_ore_slots
+        ore_slots_source = "synthetic"
 
     params = {
         "image_path": str(image_path),
@@ -256,8 +434,14 @@ def detect_inventory_layout(image_path: str) -> Dict:
         "inventory_anchor": (int(inv_x), int(inv_y)),
         "ship_marker": (int(ship_x), int(ship_y)),
         "storage_rows": storage_rows,
+        "storage_rows_mode": storage_rows_mode_used,
+        "storage_rows_parsed_count": int(len(parsed_storage_rows)),
         "ore_roi": ore_roi,
         "ore_slots": ore_slots,
+        "ore_slots_detected_count": int(len(detected_ore_slots)),
+        "ore_slots_synthesized_count": int(len(synthesized_ore_slots)),
+        "ore_slots_source": ore_slots_source,
+        "ore_point_mode": ore_point_mode,
     }
     return params
 
@@ -286,6 +470,8 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
     storage_rows: List[Point] = params.get("storage_rows", [])
     ore_roi: Optional[Rect] = params.get("ore_roi")
     ore_slots: List[Point] = params.get("ore_slots", [])
+    ore_slots_source = str(params.get("ore_slots_source", "detected"))
+    ore_slots_detected_count = int(params.get("ore_slots_detected_count", len(ore_slots)))
 
     def to_offset(pt: Point) -> Dict[str, int]:
         return {"dx": int(pt[0] - inv_x), "dy": int(pt[1] - inv_y)}
@@ -322,6 +508,8 @@ def save_layout_json(params: Dict, out_path: str, base_resolution: Tuple[int, in
             "slots": [{"x": int(x), "y": int(y)} for (x, y) in ore_slots],
             "slots_offset": [to_offset((x, y)) for (x, y) in ore_slots],
             "slots_count": int(len(ore_slots)),
+            "slots_source": ore_slots_source,
+            "slots_detected_count": int(ore_slots_detected_count),
             "slot_fallback": {"x": int(fallback_slot[0]), "y": int(fallback_slot[1])},
             "slot_fallback_offset": to_offset(fallback_slot),
         },
@@ -447,14 +635,17 @@ def print_summary(
     inv_x, inv_y = params["inventory_anchor"]
     ship_x, ship_y = params["ship_marker"]
     slots_count = layout["ore"]["slots_count"]
+    slots_source = params.get("ore_slots_source", "detected")
+    detected_count = int(params.get("ore_slots_detected_count", slots_count))
 
     print("=== Calibration summary ===")
     print(f"Image: {params.get('image_path')}")
     print(f"Size:  {params['image_size'][0]}x{params['image_size'][1]}")
     print(f"INV:   ({inv_x}, {inv_y})")
     print(f"SHIP:  ({ship_x}, {ship_y})")
-    print(f"Storage rows: {layout['storage']['row_count']}")
-    print(f"Ore slots detected: {slots_count}")
+    print(f"Storage rows: {layout['storage']['row_count']} ({params.get('storage_rows_mode', 'estimated')})")
+    print(f"Ore point mode: {params.get('ore_point_mode', 'center')}")
+    print(f"Ore slots: {slots_count} (source={slots_source}, detected={detected_count})")
     if slots_count == 0:
         fb = layout["ore"]["slot_fallback"]
         print(f"Ore fallback slot: ({fb['x']}, {fb['y']})")
@@ -473,9 +664,20 @@ def main() -> None:
     ap.add_argument("--out-preview", default="", help="Optional output preview PNG path (if empty, no preview)")
     ap.add_argument("--base-w", type=int, default=1920, help="Base width for scale hints")
     ap.add_argument("--base-h", type=int, default=1080, help="Base height for scale hints")
+    ap.add_argument("--ore-point-mode", choices=["center", "lower"], default="center", help="How slot point is placed: icon center or lower drag-friendly point")
+    ap.add_argument(
+        "--storage-row-mode",
+        choices=["auto", "parsed", "estimated"],
+        default="auto",
+        help="How to build storage rows: parse from image, estimate by fixed step, or auto with fallback",
+    )
     args = ap.parse_args()
 
-    params = detect_inventory_layout(args.image)
+    params = detect_inventory_layout(
+        args.image,
+        ore_point_mode=args.ore_point_mode,
+        storage_row_mode=args.storage_row_mode,
+    )
     layout = save_layout_json(params, args.out_json, base_resolution=(args.base_w, args.base_h))
     if args.out_ini:
         save_layout_ini(layout, args.out_ini)

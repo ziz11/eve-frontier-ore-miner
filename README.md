@@ -26,6 +26,14 @@
 ```bash
 python eve_inventory_calibrate/eve_inventory_calibrate.py --image "screenshot.jpg" --out-json eve_inventory_calibrate/layout.json --out-ini eve_inventory_calibrate/config.layout.ini --out-preview eve_inventory_calibrate/layout_preview.png
 ```
+Optional storage row detection mode:
+```bash
+python eve_inventory_calibrate/eve_inventory_calibrate.py --image "screenshot.jpg" --storage-row-mode auto
+```
+- `auto` (default): parse row positions from screenshot, fallback to estimated rows if signal is weak.
+- `parsed`: force parsed row positions only.
+- `estimated`: keep old fixed-step rows.
+- If ore slots are not detected on screenshot, calibrator now writes synthetic slot candidates in `layout_ore_slots` (plus `layout_ore_slot_fallback`) so AHK can still try multiple indices.
 4. In `config.ini`, set at minimum:
    - `[layout] storage_row_index`
    - `[layout] ore_slot_indices`
