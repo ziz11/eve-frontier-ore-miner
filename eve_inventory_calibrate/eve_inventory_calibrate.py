@@ -39,7 +39,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import configparser
 
@@ -49,7 +51,15 @@ import numpy as np
 Point = Tuple[int, int]
 Rect = Tuple[int, int, int, int]
 TARGET_MAX_SLOTS = 3
-TARGET_CLICK_OFFSET = 0.60
+TARGET_CLICK_OFFSET = 1.00
+TARGET_BASE_MIN_R = 22
+TARGET_BASE_MAX_R = 65
+TARGET_BASE_MIN_AREA = 800
+TARGET_BASE_MIN_SPACING = 80
+TARGET_BASE_Y_BAND = 40
+TARGET_BASE_BLUR_K = 5
+TARGET_BASE_CANNY_LOW = 48
+TARGET_BASE_CANNY_HIGH = 128
 
 
 # ---------------------------
@@ -442,11 +452,11 @@ def detect_ore_slots(img_bgr: np.ndarray, ore_roi: Rect, point_mode: str = "cent
 def detect_target_slots(
     img_bgr: np.ndarray,
     search_roi: Optional[Rect] = None,
-    roi_scale: float = 1.0,
     debug: bool = False,
+    debug_dir: str = ".",
 ) -> Tuple[List[Point], List[Tuple[int, int, int]]]:
     """
-    Detect target circles in top-right HUD and return lowest click points.
+    Detect target circles in top-right HUD and return lower-arc click points.
 
     Returns:
       - click points in absolute screen coordinates (left-to-right)
@@ -463,135 +473,142 @@ def detect_target_slots(
     roi = img_bgr[y1:y2, x1:x2]
     if roi.size == 0:
         return [], []
+    scale = float(h) / 1080.0
 
-    if roi_scale <= 0.0:
-        raise ValueError(f"roi_scale must be > 0, got {roi_scale}")
+    blur_k = int(max(3, round(TARGET_BASE_BLUR_K * scale)))
+    if blur_k % 2 == 0:
+        blur_k += 1
+    canny_low = int(max(20, round(TARGET_BASE_CANNY_LOW * scale)))
+    canny_high = int(max(canny_low + 20, round(TARGET_BASE_CANNY_HIGH * scale)))
+    morph_k = int(max(3, round(3 * scale)))
+    kernel = np.ones((morph_k, morph_k), np.uint8)
 
-    roi_input = roi
-    if abs(float(roi_scale) - 1.0) > 1e-9:
-        roi_input = cv2.resize(roi, None, fx=float(roi_scale), fy=float(roi_scale), interpolation=cv2.INTER_LINEAR)
+    min_r = int(max(6, round(TARGET_BASE_MIN_R * scale)))
+    max_r = int(max(min_r + 2, round(TARGET_BASE_MAX_R * scale)))
+    min_area = float(max(64.0, TARGET_BASE_MIN_AREA * (scale ** 2)))
+    min_spacing = int(max(12, round(TARGET_BASE_MIN_SPACING * scale)))
+    y_band = int(max(6, round(TARGET_BASE_Y_BAND * scale)))
 
     if debug:
-        print(
-            "[target-debug] "
-            f"roi=({x1},{y1},{x2},{y2}) "
-            f"roi_size={x2 - x1}x{y2 - y1} "
-            f"roi_input_size={roi_input.shape[1]}x{roi_input.shape[0]} "
-            f"roi_scale={roi_scale:.4f}"
+        print(f"[target-debug] roi=({x1},{y1},{x2},{y2})")
+        print(f"[target-debug] scale={scale:.4f}")
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (blur_k, blur_k), 0)
+    edges = cv2.Canny(blur, canny_low, canny_high)
+    edges = cv2.dilate(edges, kernel, iterations=1)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if debug:
+        debug_root = Path(debug_dir)
+        debug_root.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(debug_root / "roi_edges.png"), edges)
+
+    all_candidates: List[Dict[str, float]] = []
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        perimeter = float(cv2.arcLength(contour, True))
+        if perimeter <= 0.0:
+            continue
+        circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
+        (cx, cy), r = cv2.minEnclosingCircle(contour)
+        if circularity < 0.70:
+            continue
+        if r < min_r or r > max_r:
+            continue
+        if area < min_area:
+            continue
+        all_candidates.append(
+            {
+                "cx": float(cx),
+                "cy": float(cy),
+                "r": float(r),
+                "circularity": circularity,
+                "area": area,
+            }
         )
 
-    gray = cv2.cvtColor(roi_input, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (9, 9), 1.6)
-    edges = cv2.Canny(blur, 50, 150)
+    before_y = len(all_candidates)
+    filtered_by_y = all_candidates
+    if all_candidates:
+        median_y = float(np.median(np.array([c["cy"] for c in all_candidates], dtype=np.float32)))
+        row_filtered = [c for c in all_candidates if abs(float(c["cy"]) - median_y) <= y_band]
+        if row_filtered:
+            filtered_by_y = row_filtered
 
-    # Scale geometry-dependent thresholds by image height.
-    scale = float(h) / 1080.0
-    min_radius = int(max(8, round(18.0 * scale)))
-    max_radius = int(max(min_radius + 6, round(84.0 * scale)))
-    min_spacing = int(max(24, round(58.0 * scale)))
-    horizontal_threshold = int(max(10, round(24.0 * scale)))
-    min_dist = int(max(16, round(min_spacing * 0.8)))
-
-    # Hough runs in detection-space (possibly resized ROI input), so geometry must be scaled too.
-    det_min_radius = int(max(1, round(float(min_radius) * float(roi_scale))))
-    det_max_radius = int(max(det_min_radius + 2, round(float(max_radius) * float(roi_scale))))
-    det_min_dist = int(max(8, round(float(min_dist) * float(roi_scale))))
-    click_offset = TARGET_CLICK_OFFSET
-
-    circles = cv2.HoughCircles(
-        edges,
-        cv2.HOUGH_GRADIENT,
-        dp=1.2,
-        minDist=det_min_dist,
-        param1=120,
-        param2=20,
-        minRadius=det_min_radius,
-        maxRadius=det_max_radius,
-    )
-    if circles is None:
-        # Fallback for screenshots where edge map is too sparse.
-        circles = cv2.HoughCircles(
-            blur,
-            cv2.HOUGH_GRADIENT,
-            dp=1.2,
-            minDist=det_min_dist,
-            param1=120,
-            param2=20,
-            minRadius=det_min_radius,
-            maxRadius=det_max_radius,
+    def candidate_key(candidate: Dict[str, float]) -> Tuple[float, float, float]:
+        return (
+            float(candidate["circularity"]),
+            float(candidate["area"]),
+            float(candidate["r"]),
         )
-    if circles is None:
-        return [], []
 
-    candidates: List[Tuple[float, float, float, float, float, float]] = []
-    # Each candidate stores: (cx_roi, cy_roi, r_roi, cx_small, cy_small, r_small).
-    for circle in circles[0]:
-        cx_s, cy_s, r_s = map(float, circle)
-        cx = cx_s / float(roi_scale)
-        cy = cy_s / float(roi_scale)
-        r = r_s / float(roi_scale)
-        if r < min_radius or r > max_radius:
-            continue
-        if cx < 0 or cx >= (x2 - x1) or cy < 0 or cy >= (y2 - y1):
-            continue
-        candidates.append((cx, cy, r, cx_s, cy_s, r_s))
-
-    if not candidates:
-        return [], []
-
-    ys = np.array([float(c[1]) for c in candidates], dtype=np.float32)
-    median_y = float(np.median(ys))
-    candidates = [c for c in candidates if abs(float(c[1]) - median_y) < horizontal_threshold]
-    if not candidates:
-        return [], []
-
-    # Keep larger circles first, then remove near-duplicates.
-    candidates.sort(key=lambda t: t[2], reverse=True)
-    deduped: List[Tuple[float, float, float, float, float, float]] = []
-    spacing_sq = float(min_spacing * min_spacing)
-    for cx, cy, r, cx_s, cy_s, r_s in candidates:
-        keep = True
-        for ex, ey, _, _, _, _ in deduped:
-            dx = float(cx - ex)
-            dy = float(cy - ey)
-            if (dx * dx + dy * dy) < spacing_sq:
-                keep = False
+    filtered_by_y.sort(key=lambda c: float(c["cx"]))
+    kept: List[Dict[str, float]] = []
+    min_spacing_sq = float(min_spacing * min_spacing)
+    for candidate in filtered_by_y:
+        replace_idx: Optional[int] = None
+        for idx, existing in enumerate(kept):
+            dx = float(candidate["cx"] - existing["cx"])
+            dy = float(candidate["cy"] - existing["cy"])
+            if (dx * dx + dy * dy) < min_spacing_sq:
+                replace_idx = idx
                 break
-        if keep:
-            deduped.append((cx, cy, r, cx_s, cy_s, r_s))
+        if replace_idx is None:
+            kept.append(candidate)
+            continue
+        if candidate_key(candidate) > candidate_key(kept[replace_idx]):
+            kept[replace_idx] = candidate
 
-    deduped.sort(key=lambda c: c[0])
-    deduped = deduped[:TARGET_MAX_SLOTS]
+    kept.sort(key=lambda c: float(c["cx"]))
+    kept = kept[:TARGET_MAX_SLOTS]
 
-    roi_h = max(1, y2 - y1)
+    if debug:
+        print(f"[target-debug] candidates before y-filter: {before_y}")
+        print(f"[target-debug] candidates after y-filter: {len(filtered_by_y)}")
+        print(f"[target-debug] candidates after dedupe: {len(kept)}")
+        print(f"[target-debug] contours found: {len(contours)}")
+
+        contours_vis = roi.copy()
+        cv2.drawContours(contours_vis, contours, -1, (128, 128, 128), 1)
+        for candidate in kept:
+            cv2.circle(
+                contours_vis,
+                (int(round(candidate["cx"])), int(round(candidate["cy"]))),
+                int(round(candidate["r"])),
+                (0, 200, 255),
+                2,
+            )
+        cv2.imwrite(str(Path(debug_dir) / "roi_contours.png"), contours_vis)
+
     click_points: List[Point] = []
     abs_circles: List[Tuple[int, int, int]] = []
-    for cx, cy, r, cx_s, cy_s, r_s in deduped:
-        abs_x = float(x1) + float(cx)
-        abs_y = float(y1) + float(cy)
-        abs_r = float(r)
-        if not (x1 <= abs_x < x2 and y1 <= abs_y < y2):
-            raise RuntimeError(
-                "Target circle coordinate transform bug: "
-                f"abs=({abs_x:.2f},{abs_y:.2f}) outside roi=({x1},{y1},{x2},{y2})"
-            )
-        assert x1 <= abs_x < x2, f"abs_x transform drift: {abs_x} not in [{x1},{x2})"
-        assert y1 <= abs_y < y2, f"abs_y transform drift: {abs_y} not in [{y1},{y2})"
+    for candidate in kept:
+        abs_cx = int(round(x1 + float(candidate["cx"])))
+        abs_cy = int(round(y1 + float(candidate["cy"])))
+        r = int(round(candidate["r"]))
+
+        click_x = int(abs_cx)
+        click_y = int(abs_cy + int(r * TARGET_CLICK_OFFSET))
+        click_y = min(click_y, y2 - 2)
+        click_y = max(click_y, y1)
+
+        assert x1 <= click_x <= x2, f"click_x {click_x} out of ROI [{x1},{x2}]"
+        assert y1 <= click_y <= y2, f"click_y {click_y} out of ROI [{y1},{y2}]"
+
         if debug:
             print(
-                "[target-debug] circle "
-                f"det-space=({cx_s:.2f},{cy_s:.2f},{r_s:.2f}) "
-                f"roi-space=({cx:.2f},{cy:.2f},{r:.2f}) "
-                f"abs-space=({abs_x:.2f},{abs_y:.2f},{abs_r:.2f})"
+                "[target-debug] keep "
+                f"abs=({abs_cx},{abs_cy}) "
+                f"r={r} "
+                f"circularity={candidate['circularity']:.4f} "
+                f"area={candidate['area']:.1f}"
             )
 
-        click_x = int(round(abs_x))
-        # Final target point: lower arc of circle (direct-click semantics for AHK).
-        click_y = int(round(abs_y + (float(abs_r) * click_offset)))
-        click_y = clamp_int(click_y, y1, y1 + roi_h - 1)
-        abs_pt = clamp_point((int(click_x), int(click_y)), w, h)
-        click_points.append(abs_pt)
-        abs_circles.append((int(round(abs_x)), int(round(abs_y)), int(round(abs_r))))
+        click_points.append((click_x, click_y))
+        abs_circles.append((abs_cx, abs_cy, r))
 
     return click_points, abs_circles
 
@@ -663,7 +680,6 @@ def detect_inventory_layout(
     storage_row_mode: str = "auto",
     row_text_offset_x: int = 40,
     ship_search_mode: str = "auto",
-    target_roi_scale: float = 1.0,
     target_debug: bool = False,
 ) -> Dict:
     """
@@ -737,8 +753,8 @@ def detect_inventory_layout(
 
     target_slots, target_circles = detect_target_slots(
         img,
-        roi_scale=target_roi_scale,
         debug=target_debug,
+        debug_dir=str(Path(image_path).resolve().parent),
     )
     target_slots = [clamp_point(p, w, h) for p in target_slots]
     target_region = compute_target_region_from_slots(target_slots, (w, h))
@@ -765,7 +781,6 @@ def detect_inventory_layout(
         "target_slots_source": "detected",
         "target_region": target_region,
         "target_circles": target_circles,
-        "target_roi_scale": float(target_roi_scale),
         "target_debug": bool(target_debug),
     }
     return params
@@ -1033,7 +1048,6 @@ def print_summary(
     print(f"Ore point mode: {params.get('ore_point_mode', 'center')}")
     print(f"Ore slots: {slots_count} (source={slots_source}, detected={detected_count})")
     print(f"Target slots: {target_slots_count} (source={target_slots_source})")
-    print(f"Target ROI scale: {float(params.get('target_roi_scale', 1.0)):.4f}")
     print(f"Target debug: {bool(params.get('target_debug', False))}")
     if slots_count == 0:
         fb = layout["ore"]["slot_fallback"]
@@ -1073,15 +1087,9 @@ def main() -> None:
         help="Ship marker search strategy: preferred ROI only, full-screen, or auto fallback",
     )
     ap.add_argument(
-        "--target-roi-scale",
-        type=float,
-        default=1.0,
-        help="Optional scale factor for target ROI preprocessing before HoughCircles (1.0 = disabled)",
-    )
-    ap.add_argument(
         "--target-debug",
         action="store_true",
-        help="Print target circle ROI/scale coordinate transform diagnostics",
+        help="Enable target detector debug logs and save roi_edges.png + roi_contours.png",
     )
     args = ap.parse_args()
 
@@ -1091,17 +1099,23 @@ def main() -> None:
         storage_row_mode=args.storage_row_mode,
         row_text_offset_x=args.row_text_offset_x,
         ship_search_mode=args.ship_search_mode,
-        target_roi_scale=args.target_roi_scale,
         target_debug=args.target_debug,
     )
     layout = save_layout_json(params, args.out_json, base_resolution=(args.base_w, args.base_h))
     if args.out_ini:
         save_layout_ini(layout, args.out_ini)
 
+    summary_preview: Optional[str] = None
+    if args.target_debug:
+        debug_preview = "layout_preview.png"
+        render_preview(args.image, params, debug_preview)
+        summary_preview = debug_preview
+
     if args.out_preview:
         render_preview(args.image, params, args.out_preview)
+        summary_preview = args.out_preview
 
-    print_summary(params, layout, args.out_json, args.out_preview or None, args.out_ini or None)
+    print_summary(params, layout, args.out_json, summary_preview, args.out_ini or None)
 
 
 if __name__ == "__main__":
