@@ -1,146 +1,38 @@
 # EVE Frontier Ore Miner (AutoHotkey)
 
-## Current Status
-- Production flow: `ASSIST` (`F7`) with pre-locked targets.
-- `LOCK` is not considered production-ready now.
-- `AUTO` (`F8`) is kept mostly for recovery/testing.
+AHK v2 miner bot with module-oriented runtime (`LOCK` / `SELECT` / `LASER` / `UNLOAD`) and Python-assisted layout calibration.
 
-## Docs Tree
-- Runtime modules and function call flow: [`docs/MODULES.md`](docs/MODULES.md)
-- Full config key reference (all sections/keys): [`docs/CONFIG_REFERENCE.md`](docs/CONFIG_REFERENCE.md)
+## Current Status
+- Primary mode: `ASSIST` (`F7`) with already locked targets.
+- `AUTO` (`F8`) is mostly for lock/recovery experiments.
+
+## Documentation
+- Quick start: [`docs/QUICK_START.md`](docs/QUICK_START.md)
+- Module architecture: [`docs/MODULES.md`](docs/MODULES.md)
+- Config reference: [`docs/CONFIG_REFERENCE.md`](docs/CONFIG_REFERENCE.md)
 
 ## Main Files
-- `script.ahk` - entrypoint (includes `miner.ahk`)
-- `miner.ahk` - state machine and bot logic
-- `config.ini` - local runtime config (gitignored)
-- `config.ini.example` - tracked template
-- `secrets.ini` - local Telegram creds (gitignored)
-- `eve_inventory_calibrate/config.layout.ini` - generated layout overrides
+- `script.ahk` - AHK entrypoint.
+- `miner.ahk` - runtime state machine and module logic.
+- `config.ini.example` - categorized config template.
+- `secrets.ini.example` - optional Telegram credentials template.
+- `eve_inventory_calibrate/eve_inventory_calibrate.py` - screenshot calibrator.
 
-## Quick Start (ASSIST)
-1. Install AutoHotkey v2.
-2. Install Python deps for calibrator:
-```bash
-pip install -r requirements.txt
-```
-3. Create local files:
-   - `config.ini` from `config.ini.example`
-   - `secrets.ini` from `secrets.ini.example` (optional)
-4. Run inventory calibrator:
-```bash
-python eve_inventory_calibrate/eve_inventory_calibrate.py --image "screenshot.jpg" --out-json eve_inventory_calibrate/layout.json --out-ini eve_inventory_calibrate/config.layout.ini --out-preview eve_inventory_calibrate/layout_preview.png
-```
-Optional storage row detection mode:
-```bash
-python eve_inventory_calibrate/eve_inventory_calibrate.py --image "screenshot.jpg" --storage-row-mode auto
-```
-- `auto` (default): parse row positions from screenshot, fallback to estimated rows if signal is weak.
-- `parsed`: force parsed row positions only.
-- `estimated`: keep old fixed-step rows.
-- `--ship-search-mode auto|roi|full` controls ship marker search:
-  - `auto` (default): try preferred bottom-right ROI first, then full-screen fallback.
-  - `roi`: only preferred ROI (fastest, legacy behavior).
-  - `full`: always search whole screen (best when inventory window is moved).
-- `--row-text-offset-x` controls how far right row click points are shifted from the ship marker (default `72`, toward text center).
-- If ore slots are not detected on screenshot, calibrator now writes synthetic slot candidates in `layout_ore_slots` (plus `layout_ore_slot_fallback`) so AHK can still try multiple indices.
-5. In `config.ini`, set at minimum:
-   - `[layout] storage_row_index`
-   - `[layout] ore_slot_indices`
-   - `[general] target_slot_order=rtl`
-   - `[lists] laser_check_points`
-   - `[lists] active_laser_slots`
-   - `[lists] target_slots` (manual direct-click fallback if calibrator could not detect `layout_target_slots`)
-6. Run `script.ahk`.
-
-## Hotkeys (actual from `miner.ahk`)
-- `F6` - one-shot ore transfer test (`ManualOreTransferTest`).
-- `F7` - start/stop `ASSIST`.
-- `F8` - start/stop `AUTO` (mostly recovery/testing, not recommended as main mode).
+## Hotkeys
+- `F6` - one-shot ore transfer test.
+- `F7` - start/stop ASSIST.
+- `F8` - start/stop AUTO.
 - `F10` - reload script.
-- `Esc` - exit script.
+- `Esc` - exit.
 
-## If You Do Not Use Python Calibrator
-Set `layout.layout_enabled=0` in `config.ini`.
+## Config Model (new)
+Config is now split by runtime responsibility:
+- `[main]` - global runtime controls.
+- `[module_lock]` / `[module_select]` / `[module_laser]` / `[module_unload]` / `[module_recovery]`.
+- `[deprecated]` - compatibility-only keys not used in active flow.
 
-Then define these exact coordinate params manually:
-- `[points] ship_row_x`
-- `[points] ship_row_y`
-- `[points] portable_row_x`
-- `[points] portable_row_y`
-- `[lists] ore_slots`
-
-Also define these manually (not provided by Python):
-- `[lists] laser_check_points`
-- `[lists] active_laser_slots`
-- `[lists] target_slots` (required for `ASSIST` target select if no layout target slots)
-- `[lists] asteroid_points` (used by `AUTO` lock flow)
-
-Coordinate format rules:
-- Single point key in `[points]`: integer only, example `ship_row_x=244`
-- Point list keys in `[lists]`: `x,y|x,y|x,y` (or one `x,y` per line), integers only
-- `active_laser_slots`: `1|2|3` (slot numbers)
-
-Manual config example:
-```ini
-[layout]
-layout_enabled=0
-
-[points]
-ship_row_x=244
-ship_row_y=540
-portable_row_x=244
-portable_row_y=586
-
-[lists]
-ore_slots=374,556|449,556|524,556
-laser_check_points=710,980|758,980|806,980
-active_laser_slots=1|2|3
-target_slots=1575,185|1675,185|1775,185
-asteroid_points=670,430|760,400|880,340
-```
-
-## Target Slot Semantics
-- `layout_target_slots` from Python calibrator are final direct-click points.
-- Manual `[lists] target_slots` in `config.ini` use the same direct-click semantics.
-- Legacy anchor-based target tuners are deprecated and no longer used by SELECT flow:
-  - `[general] target_slot_click_offset_y`
-  - `[general] target_slot_exists_offset_y`
-  - `[general] target_slot_x_jitter_px`
-  - `[general] target_slot_y_search_radius_px`
-  - `[general] target_slot_y_search_step_px`
-
-## What Is User-Tuned In AHK (Not In Python)
-Runtime tuning remains mostly in:
-- `[timers] target_select_*`
-- `[timers] laser_*`
-- `[timers] unload_*`
-
-## Python Scope
-Python script calibrates inventory layout (`ship row`, `storage rows`, `ore ROI`, `ore slots`)
-and target-lock layout (`target region`, direct-click `target slots` in top-right panel).
-It still does not auto-mark and does not auto-tune:
-- asteroid lock points
-- laser check points / active laser slot mapping
-- combat/target colors like active orange lock state
-
-## Minimal Config Notes
-- Ore transfer path is slots-only (`TryTransferOreBySlots()`).
-- Drag behavior for unload is tuned by:
-  - `[general] drag_duration_ms`
-  - `[general] drag_steps`
-  - `[general] drag_hold_before_move_ms`
-  - `[general] drag_hold_after_move_ms`
-- Inventory refocus click during unload is disabled by default:
-  - `[general] inventory_focus_click_enabled=0`
-  - set to `1` only if game/client requires explicit click-to-focus inventory before drag.
-  - when enabled, bot clicks `[points] ship_row_x/ship_row_y` first (from Python `config.layout.ini`), not `inventory_window_x/y`.
-- Most timing stability is controlled by:
-  - `[timers] target_select_*`
-  - `[timers] laser_*`
-  - `[timers] unload_*`
+Backward compatibility is preserved: old keys from `[general]` and `[timers]` are still read as fallback.
 
 ## Notes
-- Reload script (`F10`) after config updates.
-- This README hotkey list is verified against `miner.ahk` hotkey bindings (`F6/F7/F8/F10`).
-- Full per-key config list is intentionally moved to [`docs/CONFIG_REFERENCE.md`](docs/CONFIG_REFERENCE.md).
-
+- After editing `config.ini`, reload script with `F10`.
+- If using calibrator output, keep `layout.layout_enabled=1` and regenerate `eve_inventory_calibrate/config.layout.ini` when UI layout changes.
