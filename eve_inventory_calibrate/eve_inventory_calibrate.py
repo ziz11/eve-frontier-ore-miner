@@ -897,7 +897,6 @@ def save_layout_ini(layout: Dict, out_path: str) -> None:
     cfg.optionxform = str
 
     ship_click = layout["inventory"].get("ship_row_click") or layout["inventory"].get("ship_marker") or {}
-    ore_roi = layout["ore"]["roi"] or {}
     target_region = (layout.get("targets", {}) or {}).get("region") or {}
     storage_rows = layout["storage"]["rows"] or []
     ore_slots = layout["ore"]["slots"] or []
@@ -908,12 +907,7 @@ def save_layout_ini(layout: Dict, out_path: str) -> None:
         "ship_row_x": str(int(ship_click.get("x", 0))),
         "ship_row_y": str(int(ship_click.get("y", 0))),
     }
-    regions: Dict[str, str] = {
-        "ore_scan_x1": str(int(ore_roi.get("x1", 0))),
-        "ore_scan_y1": str(int(ore_roi.get("y1", 0))),
-        "ore_scan_x2": str(int(ore_roi.get("x2", 0))),
-        "ore_scan_y2": str(int(ore_roi.get("y2", 0))),
-    }
+    regions: Dict[str, str] = {}
     if target_region:
         regions["target_region_x1"] = str(int(target_region.get("x1", 0)))
         regions["target_region_y1"] = str(int(target_region.get("y1", 0)))
@@ -924,7 +918,7 @@ def save_layout_ini(layout: Dict, out_path: str) -> None:
         "layout_storage_rows": points_to_ini(storage_rows),
         "layout_ore_slots": points_to_ini(ore_slots),
         "layout_ore_slot_fallback": f"{int(ore_fallback['x'])},{int(ore_fallback['y'])}",
-        "layout_target_slots": points_to_ini_lines(target_slots),
+        "layout_target_slots": points_to_ini(target_slots),
     }
     cfg["meta"] = {
         "layout_generated_at": layout["meta"]["generated_at"],
@@ -1120,3 +1114,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

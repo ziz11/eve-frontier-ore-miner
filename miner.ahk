@@ -19,7 +19,7 @@ global lastSelectedSlotX := 0
 global lastSelectedSlotY := 0
 global lastTargetSelectedTick := 0
 global lastLaserActionTick := 0
-global lastOreScanTick := 0
+global lastOreTransferTick := 0
 global oreNoTextStreak := 0
 global stateEnterTick := 0
 
@@ -36,7 +36,7 @@ F10::Reload
 Esc::ExitApp
 
 ToggleBot(mode) {
-    global running, runMode, state, lastUnloadTick, nextUnloadTick, laserLostTick, lastLaserRetryTick, lastHeartbeatTick, lastDebugLoopTick, lastError, lastSelectedSlotX, lastSelectedSlotY, lastTargetSelectedTick, lastLaserActionTick, lastOreScanTick, oreNoTextStreak, stateEnterTick
+    global running, runMode, state, lastUnloadTick, nextUnloadTick, laserLostTick, lastLaserRetryTick, lastHeartbeatTick, lastDebugLoopTick, lastError, lastSelectedSlotX, lastSelectedSlotY, lastTargetSelectedTick, lastLaserActionTick, lastOreTransferTick, oreNoTextStreak, stateEnterTick
     if running && runMode = mode {
         running := false
     } else {
@@ -59,7 +59,7 @@ ToggleBot(mode) {
         lastSelectedSlotY := 0
         lastTargetSelectedTick := 0
         lastLaserActionTick := 0
-        lastOreScanTick := 0
+        lastOreTransferTick := 0
         oreNoTextStreak := 0
         SendTelegram("STARTED mode=" runMode)
         SetTimer MainLoop, cfg["main_loop_ms"]
@@ -173,7 +173,7 @@ DoLockStage() {
 
 GetLockCandidates() {
     ; AUTO lock strategy:
-    ; 1) dynamic scan for white asteroid markers
+    ; 1) dynamic probe for white asteroid markers
     ; 2) fallback to static points from config list
     if cfg["dynamic_lock_enabled"] {
         points := FindDynamicAsteroidPoints()
@@ -195,16 +195,16 @@ GetLockCandidates() {
 
 FindDynamicAsteroidPoints() {
     points := []
-    step := cfg["asteroid_scan_step_px"]
+    step := cfg["asteroid_probe_step_px"]
     dedupeRadius := cfg["asteroid_dedupe_radius_px"]
     maxCandidates := cfg["asteroid_max_candidates"]
     targetColor := cfg["asteroid_marker_color"]
     variation := cfg["asteroid_marker_variation"]
 
-    x1 := cfg["asteroid_scan_x1"]
-    y1 := cfg["asteroid_scan_y1"]
-    x2 := cfg["asteroid_scan_x2"]
-    y2 := cfg["asteroid_scan_y2"]
+    x1 := cfg["asteroid_probe_x1"]
+    y1 := cfg["asteroid_probe_y1"]
+    x2 := cfg["asteroid_probe_x2"]
+    y2 := cfg["asteroid_probe_y2"]
 
     y := y1
     while y <= y2 {
@@ -507,13 +507,14 @@ SortPointsLeftToRight(points) {
 }
 
 DoLaserStage() {
-    global state, runMode, laserLostTick, lastLaserRetryTick, lastTargetSelectedTick, lastLaserActionTick, lastOreScanTick, oreNoTextStreak
+    global state, runMode, laserLostTick, lastLaserRetryTick, lastTargetSelectedTick, lastLaserActionTick, lastOreTransferTick, oreNoTextStreak
 
     if !HasAnyTopRightTarget() {
         SetState(STATE_SELECT, "no targets in laser stage")
         return
     }
 
+    MajorActionPrepDelay("lock-check")
     if !HasSelectedTargetActive() {
         oreNoTextStreak := 0
         SetState(STATE_SELECT, "selected target lost")
@@ -527,7 +528,7 @@ DoLaserStage() {
     }
 
     now := A_TickCount
-    oreTransferIntervalMs := cfg["ore_scan_interval_ms"]
+    oreTransferIntervalMs := cfg["ore_transfer_interval_ms"]
     if oreTransferIntervalMs < 15000 {
         oreTransferIntervalMs := 15000
     }
@@ -537,8 +538,9 @@ DoLaserStage() {
         laserLostTick := 0
 
         ; LASER stage does periodic ore transfer from configured slot coordinates.
-        if lastOreScanTick = 0 || (now - lastOreScanTick) >= oreTransferIntervalMs {
-            lastOreScanTick := now
+        if lastOreTransferTick = 0 || (now - lastOreTransferTick) >= oreTransferIntervalMs {
+            lastOreTransferTick := now
+            MajorActionPrepDelay("ore-transfer")
             moved := TryTransferOre()
             if cfg["ore_transfer_post_delay_ms"] > 0 {
                 Sleep cfg["ore_transfer_post_delay_ms"]
@@ -558,9 +560,9 @@ DoLaserStage() {
 
             oreNoTextStreak += 1
             if cfg["debug_enabled"] {
-                Debug("ore transfer moved=0 streak=" oreNoTextStreak "/" cfg["ore_scan_no_text_limit"])
+                Debug("ore transfer moved=0 streak=" oreNoTextStreak "/" cfg["ore_transfer_no_move_limit"])
             }
-            if oreNoTextStreak >= cfg["ore_scan_no_text_limit"] {
+            if oreNoTextStreak >= cfg["ore_transfer_no_move_limit"] {
                 oreNoTextStreak := 0
                 if CountActiveLasers() < cfg["min_active_lasers_required"] {
                     lastLaserRetryTick := 0
@@ -575,8 +577,8 @@ DoLaserStage() {
     if cfg["laser_allow_partial"] && activeCount > 0 {
         laserLostTick := 0
         ; Keep ore flow alive even in partial mode.
-        if lastOreScanTick = 0 || (now - lastOreScanTick) >= oreTransferIntervalMs {
-            lastOreScanTick := now
+        if lastOreTransferTick = 0 || (now - lastOreTransferTick) >= oreTransferIntervalMs {
+            lastOreTransferTick := now
             moved := TryTransferOre()
             if cfg["ore_transfer_post_delay_ms"] > 0 {
                 Sleep cfg["ore_transfer_post_delay_ms"]
@@ -594,14 +596,15 @@ DoLaserStage() {
             } else {
                 oreNoTextStreak += 1
                 if cfg["debug_enabled"] {
-                    Debug("ore transfer moved=0 streak=" oreNoTextStreak "/" cfg["ore_scan_no_text_limit"] " (partial)")
+                    Debug("ore transfer moved=0 streak=" oreNoTextStreak "/" cfg["ore_transfer_no_move_limit"] " (partial)")
                 }
-                if oreNoTextStreak >= cfg["ore_scan_no_text_limit"] {
+                if oreNoTextStreak >= cfg["ore_transfer_no_move_limit"] {
                     oreNoTextStreak := 0
                 }
             }
         }
         if (now - lastLaserRetryTick) >= cfg["laser_partial_retry_delay_ms"] {
+            MajorActionPrepDelay("laser-activate")
             TryActivateLasersBySlots()
             lastLaserRetryTick := now
         }
@@ -620,6 +623,7 @@ DoLaserStage() {
     }
 
     if (now - lastLaserRetryTick) >= cfg["laser_retry_delay_ms"] {
+        MajorActionPrepDelay("laser-activate")
         TryActivateLasersBySlots()
         activeCount := CountActiveLasers()
         if activeCount >= cfg["min_active_lasers_required"] {
@@ -875,11 +879,22 @@ TryEmergencyLock() {
 DoUnload() {
     Debug(
         "unload start slots=" cfg["ore_slots"].Length
-        " ore_scan=" cfg["ore_scan_x1"] "," cfg["ore_scan_y1"] "-" cfg["ore_scan_x2"] "," cfg["ore_scan_y2"]
         " portable=" cfg["portable_row_x"] "," cfg["portable_row_y"]
     )
+    MajorActionPrepDelay("ore-transfer")
     moved := TryTransferOre()
     Debug("unload end moved=" moved)
+}
+
+MajorActionPrepDelay(action := "") {
+    delayMs := cfg["major_action_prep_delay_ms"]
+    if delayMs <= 0 {
+        return
+    }
+    if action != "" {
+        Debug("prep delay action=" action " ms=" delayMs)
+    }
+    Sleep delayMs
 }
 
 TryTransferOre() {
@@ -894,7 +909,7 @@ TryTransferOreBySlots() {
         return 0
     }
 
-    maxTransfers := cfg["ore_transfer_max_per_scan"]
+    maxTransfers := cfg["ore_transfer_max_per_cycle"]
     if maxTransfers < 1 {
         maxTransfers := cfg["ore_slots"].Length
     }
@@ -1210,7 +1225,7 @@ LoadConfig() {
         dynRaw := IniRead("config.ini", "general", "dynamic_lock_ena1", "1")
     }
     cfg["dynamic_lock_enabled"] := Integer(dynRaw) = 1
-    cfg["asteroid_scan_step_px"] := Integer(IniRead("config.ini", "general", "asteroid_scan_step_px", 10))
+    cfg["asteroid_probe_step_px"] := Integer(IniRead("config.ini", "general", "asteroid_probe_step_px", 10))
     cfg["asteroid_dedupe_radius_px"] := Integer(IniRead("config.ini", "general", "asteroid_dedupe_radius_px", 26))
     cfg["asteroid_max_candidates"] := Integer(IniRead("config.ini", "general", "asteroid_max_candidates", 12))
     cfg["target_slot_y_search_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_y_search_radius_px", 40))
@@ -1240,6 +1255,7 @@ LoadConfig() {
     cfg["laser_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_retry_delay_ms", 5000))
     cfg["state_start_delay_ms"] := Integer(IniRead("config.ini", "timers", "state_start_delay_ms", 200))
     cfg["click_hover_before_click_ms"] := Integer(IniRead("config.ini", "timers", "click_hover_before_click_ms", 200))
+    cfg["major_action_prep_delay_ms"] := Integer(IniRead("config.ini", "timers", "major_action_prep_delay_ms", 300))
     cfg["laser_allow_partial"] := Integer(IniRead("config.ini", "timers", "laser_allow_partial", 1)) = 1
     cfg["laser_partial_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_partial_retry_delay_ms", 20000))
     cfg["laser_fail_deadline_ms"] := Integer(IniRead("config.ini", "timers", "laser_fail_deadline_ms", 20000))
@@ -1249,9 +1265,9 @@ LoadConfig() {
     cfg["unload_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "unload_after_target_select_delay_ms", 1000))
     cfg["unload_block_during_laser"] := Integer(IniRead("config.ini", "timers", "unload_block_during_laser", 1)) = 1
     cfg["unload_busy_retry_ms"] := Integer(IniRead("config.ini", "timers", "unload_busy_retry_ms", 1500))
-    cfg["ore_scan_interval_ms"] := Integer(IniRead("config.ini", "timers", "ore_scan_interval_ms", 10000))
-    cfg["ore_scan_no_text_limit"] := Integer(IniRead("config.ini", "timers", "ore_scan_no_text_limit", 2))
-    cfg["ore_transfer_max_per_scan"] := Integer(IniRead("config.ini", "timers", "ore_transfer_max_per_scan", 3))
+    cfg["ore_transfer_interval_ms"] := Integer(IniRead("config.ini", "timers", "ore_transfer_interval_ms", 10000))
+    cfg["ore_transfer_no_move_limit"] := Integer(IniRead("config.ini", "timers", "ore_transfer_no_move_limit", 2))
+    cfg["ore_transfer_max_per_cycle"] := Integer(IniRead("config.ini", "timers", "ore_transfer_max_per_cycle", 3))
     cfg["ore_transfer_post_delay_ms"] := Integer(IniRead("config.ini", "timers", "ore_transfer_post_delay_ms", 300))
     cfg["min_active_lasers_required"] := Integer(IniRead("config.ini", "timers", "min_active_lasers_required", 1))
     cfg["laser_probe_radius_px"] := Integer(IniRead("config.ini", "timers", "laser_probe_radius_px", 3))
@@ -1270,7 +1286,7 @@ LoadConfig() {
     cfg["target_select_settle_ms"] := Integer(IniRead("config.ini", "timers", "target_select_settle_ms", 200))
     cfg["target_select_slot_attempts"] := Integer(IniRead("config.ini", "timers", "target_select_slot_attempts", 3))
     cfg["target_select_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "target_select_retry_delay_ms", 200))
-    cfg["target_select_confirm_ms"] := Integer(IniRead("config.ini", "timers", "target_select_confirm_ms", 3000))
+    cfg["target_select_confirm_ms"] := Integer(IniRead("config.ini", "timers", "target_select_confirm_ms", 1000))
     cfg["target_select_poll_ms"] := Integer(IniRead("config.ini", "timers", "target_select_poll_ms", 200))
     cfg["target_active_confirm_hits"] := Integer(IniRead("config.ini", "timers", "target_active_confirm_hits", 2))
     cfg["target_require_state_transition"] := Integer(IniRead("config.ini", "timers", "target_require_state_transition", 1)) = 1
@@ -1287,15 +1303,10 @@ LoadConfig() {
     cfg["too_far_region_y1"] := Integer(IniRead("config.ini", "regions", "too_far_region_y1", 70))
     cfg["too_far_region_x2"] := Integer(IniRead("config.ini", "regions", "too_far_region_x2", 1450))
     cfg["too_far_region_y2"] := Integer(IniRead("config.ini", "regions", "too_far_region_y2", 300))
-    cfg["asteroid_scan_x1"] := Integer(IniRead("config.ini", "regions", "asteroid_scan_x1", 420))
-    cfg["asteroid_scan_y1"] := Integer(IniRead("config.ini", "regions", "asteroid_scan_y1", 180))
-    cfg["asteroid_scan_x2"] := Integer(IniRead("config.ini", "regions", "asteroid_scan_x2", 1540))
-    cfg["asteroid_scan_y2"] := Integer(IniRead("config.ini", "regions", "asteroid_scan_y2", 980))
-    cfg["ore_scan_x1"] := Integer(IniRead("config.ini", "regions", "ore_scan_x1", 310))
-    cfg["ore_scan_y1"] := Integer(IniRead("config.ini", "regions", "ore_scan_y1", 575))
-    cfg["ore_scan_x2"] := Integer(IniRead("config.ini", "regions", "ore_scan_x2", 360))
-    cfg["ore_scan_y2"] := Integer(IniRead("config.ini", "regions", "ore_scan_y2", 610))
-
+    cfg["asteroid_probe_x1"] := Integer(IniRead("config.ini", "regions", "asteroid_probe_x1", 420))
+    cfg["asteroid_probe_y1"] := Integer(IniRead("config.ini", "regions", "asteroid_probe_y1", 180))
+    cfg["asteroid_probe_x2"] := Integer(IniRead("config.ini", "regions", "asteroid_probe_x2", 1540))
+    cfg["asteroid_probe_y2"] := Integer(IniRead("config.ini", "regions", "asteroid_probe_y2", 980))
     cfg["target_present_color"] := IniRead("config.ini", "colors", "target_present_color", "0x4A4D51")
     cfg["target_active_orange_color"] := IniRead("config.ini", "colors", "target_active_orange_color", "0xFF4700")
     cfg["target_active_color_variation"] := Integer(IniRead("config.ini", "colors", "target_active_color_variation", 24))
@@ -1370,16 +1381,6 @@ ApplyLayoutOverrides(layoutIniPath) {
         cfg["ship_row_y"] := Integer(shipYraw)
     }
 
-    oreX1raw := IniRead(layoutIniPath, "regions", "ore_scan_x1", "")
-    oreY1raw := IniRead(layoutIniPath, "regions", "ore_scan_y1", "")
-    oreX2raw := IniRead(layoutIniPath, "regions", "ore_scan_x2", "")
-    oreY2raw := IniRead(layoutIniPath, "regions", "ore_scan_y2", "")
-    if oreX1raw != "" && oreY1raw != "" && oreX2raw != "" && oreY2raw != "" {
-        cfg["ore_scan_x1"] := Integer(oreX1raw)
-        cfg["ore_scan_y1"] := Integer(oreY1raw)
-        cfg["ore_scan_x2"] := Integer(oreX2raw)
-        cfg["ore_scan_y2"] := Integer(oreY2raw)
-    }
     targetX1raw := IniRead(layoutIniPath, "regions", "target_region_x1", "")
     targetY1raw := IniRead(layoutIniPath, "regions", "target_region_y1", "")
     targetX2raw := IniRead(layoutIniPath, "regions", "target_region_x2", "")
@@ -1489,4 +1490,5 @@ ParseIntList(raw, minValue, maxValue) {
     }
     return out
 }
+
 

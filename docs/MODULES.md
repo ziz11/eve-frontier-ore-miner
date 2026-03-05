@@ -100,7 +100,7 @@ This document describes the current `miner.ahk` implementation by modules: logic
    - "too far" banner -> `SELECT`.
 2. Reads active lasers via `CountActiveLasers()`.
 3. If active lasers are sufficient:
-   - periodic ore transfer tick (`ore_scan_interval_ms`) via `TryTransferOre()`;
+   - periodic ore transfer tick (`ore_transfer_interval_ms`) via `TryTransferOre()`;
    - updates `oreNoTextStreak` as a generic "nothing moved" streak counter.
 4. If partial mode is allowed (`laser_allow_partial`) and at least one laser is active:
    - continues ore flow;
@@ -135,7 +135,7 @@ This document describes the current `miner.ahk` implementation by modules: logic
   - validates destination (`portable_row`) once;
   - `FocusInventoryWindow()`;
   - iterates `cfg["ore_slots"]`;
-  - `DragMouse(slot -> portable_row)` up to `ore_transfer_max_per_scan`.
+  - `DragMouse(slot -> portable_row)` up to `ore_transfer_max_per_cycle`.
 
 ### Scheduling
 - `ScheduleNextUnload()` picks next unload tick in range `unload_interval_min_ms..unload_interval_max_ms`.
@@ -154,7 +154,7 @@ This document describes the current `miner.ahk` implementation by modules: logic
 ### Key Functions
 - `LoadConfig()` - reads `general/layout/timers/regions/colors/points/lists/images/telegram`.
 - `ApplyLayoutOverrides(path)`:
-  - overrides `ship_row`, `portable_row`, `ore_scan_region`, `ore_slots`;
+  - overrides `ship_row`, `portable_row`, `ore_slots`;
   - selects `portable_row` by `storage_row_index`;
   - selects `ore_slots` by `ore_slot_indices`.
 - Parsers: `ParsePoints()`, `ParseIntList()`.
@@ -190,3 +190,4 @@ This document describes the current `miner.ahk` implementation by modules: logic
 - `LASER -> SELECT`: target lost / too far / no targets in `ASSIST`.
 - `LASER -> LOCK`: no targets in `AUTO`.
 - `ANY -> STOP`: `StopWithError(...)` (critical error).
+
