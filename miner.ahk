@@ -1411,9 +1411,17 @@ ApplyLayoutOverrides(layoutIniPath) {
 
     selectedOreSlots := []
     if layoutOreSlots.Length > 0 {
-        for _, slotIdx in cfg["ore_slot_indices"] {
-            if slotIdx >= 1 && slotIdx <= layoutOreSlots.Length {
-                selectedOreSlots.Push(layoutOreSlots[slotIdx])
+        if cfg["ore_slot_indices"].Length = 0 {
+            ; Empty ore_slot_indices means: use all detected layout slots.
+            for slot in layoutOreSlots {
+                selectedOreSlots.Push([slot[1], slot[2]])
+            }
+            Debug("layout ore slots using all detected slots count=" selectedOreSlots.Length)
+        } else {
+            for _, slotIdx in cfg["ore_slot_indices"] {
+                if slotIdx >= 1 && slotIdx <= layoutOreSlots.Length {
+                    selectedOreSlots.Push(layoutOreSlots[slotIdx])
+                }
             }
         }
         if selectedOreSlots.Length = 0 {
