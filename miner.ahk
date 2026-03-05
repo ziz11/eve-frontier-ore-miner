@@ -1594,3 +1594,24 @@ ParseIntList(raw, minValue, maxValue) {
     }
     return out
 }
+
+ParseColorHex(raw, defaultValue := 0xFFFFFF) {
+    value := Trim(raw)
+    if value = "" {
+        return defaultValue
+    }
+
+    if RegExMatch(value, "^#([0-9A-Fa-f]{6})$", &m) {
+        return Integer("0x" m[1])
+    }
+
+    if RegExMatch(value, "^0x([0-9A-Fa-f]{6})$", &m) {
+        return Integer("0x" m[1])
+    }
+
+    if RegExMatch(value, "^[0-9]+$") {
+        return Integer(value)
+    }
+
+    return defaultValue
+}
