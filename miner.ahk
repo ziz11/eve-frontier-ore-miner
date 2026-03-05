@@ -21,6 +21,7 @@ global lastTargetSelectedTick := 0
 global lastLaserActionTick := 0
 global lastOreScanTick := 0
 global oreNoTextStreak := 0
+global stateEnterTick := 0
 
 global STATE_LOCK := "LOCK"
 global STATE_SELECT := "SELECT"
@@ -35,7 +36,7 @@ F10::Reload
 Esc::ExitApp
 
 ToggleBot(mode) {
-    global running, runMode, state, lastUnloadTick, nextUnloadTick, laserLostTick, lastLaserRetryTick, lastHeartbeatTick, lastDebugLoopTick, lastError, lastSelectedSlotX, lastSelectedSlotY, lastTargetSelectedTick, lastLaserActionTick, lastOreScanTick, oreNoTextStreak
+    global running, runMode, state, lastUnloadTick, nextUnloadTick, laserLostTick, lastLaserRetryTick, lastHeartbeatTick, lastDebugLoopTick, lastError, lastSelectedSlotX, lastSelectedSlotY, lastTargetSelectedTick, lastLaserActionTick, lastOreScanTick, oreNoTextStreak, stateEnterTick
     if running && runMode = mode {
         running := false
     } else {
@@ -45,6 +46,7 @@ ToggleBot(mode) {
 
     if running {
         state := STATE_SELECT
+        stateEnterTick := A_TickCount
         lastUnloadTick := A_TickCount
         nextUnloadTick := 0
         ScheduleNextUnload()
@@ -70,7 +72,7 @@ ToggleBot(mode) {
 }
 
 MainLoop() {
-    global running, state, lastUnloadTick, nextUnloadTick, lastHeartbeatTick, lastDebugLoopTick, lastTargetSelectedTick
+    global running, state, lastUnloadTick, nextUnloadTick, lastHeartbeatTick, lastDebugLoopTick, lastTargetSelectedTick, stateEnterTick
     if !running {
         return
     }
@@ -108,6 +110,9 @@ MainLoop() {
     }
 
     if state = STATE_LOCK {
+        if cfg["state_start_delay_ms"] > 0 && (now - stateEnterTick) < cfg["state_start_delay_ms"] {
+            return
+        }
         if runMode != "AUTO" {
             SetState(STATE_SELECT, "assist mode skips lock stage")
             return
@@ -119,6 +124,9 @@ MainLoop() {
     }
 
     if state = STATE_SELECT {
+        if cfg["state_start_delay_ms"] > 0 && (now - stateEnterTick) < cfg["state_start_delay_ms"] {
+            return
+        }
         if SelectTopRightTarget() {
             SetState(STATE_LASER, "target selected")
         } else if !HasAnyTopRightTarget() {
@@ -128,6 +136,9 @@ MainLoop() {
     }
 
     if state = STATE_LASER {
+        if cfg["state_start_delay_ms"] > 0 && (now - stateEnterTick) < cfg["state_start_delay_ms"] {
+            return
+        }
         DoLaserStage()
         return
     }
@@ -280,7 +291,9 @@ SelectTopRightTarget() {
     }
 
     if triedAnySlot {
-        StopWithError("TARGET LOCK failed: cannot activate any slot")
+        ; Do not hard-stop on one failed select cycle.
+        ; Target list/focus can be transiently unstable after inventory actions.
+        Debug("select cycle failed: cannot activate any slot this pass")
         return false
     }
 
@@ -527,7 +540,13 @@ DoLaserStage() {
         if lastOreScanTick = 0 || (now - lastOreScanTick) >= oreTransferIntervalMs {
             lastOreScanTick := now
             moved := TryTransferOre()
+            if cfg["ore_transfer_post_delay_ms"] > 0 {
+                Sleep cfg["ore_transfer_post_delay_ms"]
+            }
             if !HasSelectedTargetActive() {
+                if TryRefocusSelectedTargetAfterTransfer() {
+                    return
+                }
                 oreNoTextStreak := 0
                 SetState(STATE_SELECT, "selected target lost after ore transfer focus")
                 return
@@ -559,7 +578,13 @@ DoLaserStage() {
         if lastOreScanTick = 0 || (now - lastOreScanTick) >= oreTransferIntervalMs {
             lastOreScanTick := now
             moved := TryTransferOre()
+            if cfg["ore_transfer_post_delay_ms"] > 0 {
+                Sleep cfg["ore_transfer_post_delay_ms"]
+            }
             if !HasSelectedTargetActive() {
+                if TryRefocusSelectedTargetAfterTransfer() {
+                    return
+                }
                 oreNoTextStreak := 0
                 SetState(STATE_SELECT, "selected target lost after ore transfer focus (partial)")
                 return
@@ -609,6 +634,41 @@ DoLaserStage() {
         AttemptLaserFailureRecovery()
         StopWithError("LASER failed: unable to activate configured slots")
     }
+}
+
+TryRefocusSelectedTargetAfterTransfer() {
+    global lastSelectedSlotX, lastSelectedSlotY
+
+    if lastSelectedSlotX <= 0 || lastSelectedSlotY <= 0 {
+        return false
+    }
+
+    attempts := cfg["post_transfer_refocus_attempts"]
+    delayMs := cfg["post_transfer_refocus_delay_ms"]
+    if attempts < 1 {
+        attempts := 1
+    }
+    if delayMs < 0 {
+        delayMs := 0
+    }
+
+    attempt := 1
+    while attempt <= attempts {
+        Debug("post-transfer refocus click=" lastSelectedSlotX "," lastSelectedSlotY " attempt=" attempt "/" attempts)
+        LeftClick lastSelectedSlotX, lastSelectedSlotY
+        Sleep cfg["target_select_settle_ms"]
+        if WaitForActiveTarget(lastSelectedSlotX, lastSelectedSlotY) {
+            Debug("post-transfer refocus success attempt=" attempt)
+            return true
+        }
+        if attempt < attempts && delayMs > 0 {
+            Sleep delayMs
+        }
+        attempt += 1
+    }
+
+    Debug("post-transfer refocus failed attempts=" attempts)
+    return false
 }
 
 HasSelectedTargetActive() {
@@ -975,10 +1035,11 @@ StopWithError(msg) {
 }
 
 SetState(nextState, reason := "") {
-    global state
+    global state, stateEnterTick
     if state != nextState {
         Debug("state " state " -> " nextState ((reason != "") ? " | " reason : ""))
         state := nextState
+        stateEnterTick := A_TickCount
     }
 }
 
@@ -1032,6 +1093,9 @@ CountColorMatchesInRect(x1, y1, x2, y2, targetColor, variation, stopAt := 0, &sa
 LeftClick(x, y) {
     Debug("left click x=" x " y=" y)
     MouseMove x, y, 0
+    if cfg["click_hover_before_click_ms"] > 0 {
+        Sleep cfg["click_hover_before_click_ms"]
+    }
     ShowClickMarker("L", x, y)
     Click "Left"
 }
@@ -1039,6 +1103,9 @@ LeftClick(x, y) {
 RightClick(x, y) {
     Debug("right click x=" x " y=" y)
     MouseMove x, y, 0
+    if cfg["click_hover_before_click_ms"] > 0 {
+        Sleep cfg["click_hover_before_click_ms"]
+    }
     ShowClickMarker("R", x, y)
     Click "Right"
 }
@@ -1171,6 +1238,8 @@ LoadConfig() {
     cfg["lock_timeout_ms"] := Integer(IniRead("config.ini", "timers", "lock_timeout_ms", 30000))
     cfg["lock_retry_pause_ms"] := Integer(IniRead("config.ini", "timers", "lock_retry_pause_ms", 500))
     cfg["laser_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_retry_delay_ms", 5000))
+    cfg["state_start_delay_ms"] := Integer(IniRead("config.ini", "timers", "state_start_delay_ms", 200))
+    cfg["click_hover_before_click_ms"] := Integer(IniRead("config.ini", "timers", "click_hover_before_click_ms", 200))
     cfg["laser_allow_partial"] := Integer(IniRead("config.ini", "timers", "laser_allow_partial", 1)) = 1
     cfg["laser_partial_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_partial_retry_delay_ms", 20000))
     cfg["laser_fail_deadline_ms"] := Integer(IniRead("config.ini", "timers", "laser_fail_deadline_ms", 20000))
@@ -1183,6 +1252,7 @@ LoadConfig() {
     cfg["ore_scan_interval_ms"] := Integer(IniRead("config.ini", "timers", "ore_scan_interval_ms", 10000))
     cfg["ore_scan_no_text_limit"] := Integer(IniRead("config.ini", "timers", "ore_scan_no_text_limit", 2))
     cfg["ore_transfer_max_per_scan"] := Integer(IniRead("config.ini", "timers", "ore_transfer_max_per_scan", 3))
+    cfg["ore_transfer_post_delay_ms"] := Integer(IniRead("config.ini", "timers", "ore_transfer_post_delay_ms", 300))
     cfg["min_active_lasers_required"] := Integer(IniRead("config.ini", "timers", "min_active_lasers_required", 1))
     cfg["laser_probe_radius_px"] := Integer(IniRead("config.ini", "timers", "laser_probe_radius_px", 3))
     cfg["laser_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_after_target_select_delay_ms", 1000))
@@ -1197,14 +1267,16 @@ LoadConfig() {
     cfg["laser_recovery_unload_attempts"] := Integer(IniRead("config.ini", "timers", "laser_recovery_unload_attempts", 3))
     cfg["laser_recovery_unload_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_recovery_unload_delay_ms", 2000))
     cfg["emergency_lock_timeout_ms"] := Integer(IniRead("config.ini", "timers", "emergency_lock_timeout_ms", 12000))
-    cfg["target_select_settle_ms"] := Integer(IniRead("config.ini", "timers", "target_select_settle_ms", 120))
+    cfg["target_select_settle_ms"] := Integer(IniRead("config.ini", "timers", "target_select_settle_ms", 200))
     cfg["target_select_slot_attempts"] := Integer(IniRead("config.ini", "timers", "target_select_slot_attempts", 3))
-    cfg["target_select_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "target_select_retry_delay_ms", 1200))
+    cfg["target_select_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "target_select_retry_delay_ms", 200))
     cfg["target_select_confirm_ms"] := Integer(IniRead("config.ini", "timers", "target_select_confirm_ms", 3000))
-    cfg["target_select_poll_ms"] := Integer(IniRead("config.ini", "timers", "target_select_poll_ms", 120))
+    cfg["target_select_poll_ms"] := Integer(IniRead("config.ini", "timers", "target_select_poll_ms", 200))
     cfg["target_active_confirm_hits"] := Integer(IniRead("config.ini", "timers", "target_active_confirm_hits", 2))
     cfg["target_require_state_transition"] := Integer(IniRead("config.ini", "timers", "target_require_state_transition", 1)) = 1
     cfg["target_active_preselected_extra_hits"] := Integer(IniRead("config.ini", "timers", "target_active_preselected_extra_hits", 2))
+    cfg["post_transfer_refocus_attempts"] := Integer(IniRead("config.ini", "timers", "post_transfer_refocus_attempts", 2))
+    cfg["post_transfer_refocus_delay_ms"] := Integer(IniRead("config.ini", "timers", "post_transfer_refocus_delay_ms", 350))
 
     cfg["target_region_x1"] := Integer(IniRead("config.ini", "regions", "target_region_x1", 1360))
     cfg["target_region_y1"] := Integer(IniRead("config.ini", "regions", "target_region_y1", 180))
@@ -1339,9 +1411,17 @@ ApplyLayoutOverrides(layoutIniPath) {
 
     selectedOreSlots := []
     if layoutOreSlots.Length > 0 {
-        for _, slotIdx in cfg["ore_slot_indices"] {
-            if slotIdx >= 1 && slotIdx <= layoutOreSlots.Length {
-                selectedOreSlots.Push(layoutOreSlots[slotIdx])
+        if cfg["ore_slot_indices"].Length = 0 {
+            ; Empty ore_slot_indices means: use all detected layout slots.
+            for slot in layoutOreSlots {
+                selectedOreSlots.Push([slot[1], slot[2]])
+            }
+            Debug("layout ore slots using all detected slots count=" selectedOreSlots.Length)
+        } else {
+            for _, slotIdx in cfg["ore_slot_indices"] {
+                if slotIdx >= 1 && slotIdx <= layoutOreSlots.Length {
+                    selectedOreSlots.Push(layoutOreSlots[slotIdx])
+                }
             }
         }
         if selectedOreSlots.Length = 0 {
