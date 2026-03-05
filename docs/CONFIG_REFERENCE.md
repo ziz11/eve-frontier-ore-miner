@@ -53,7 +53,7 @@ asteroid_points=670,430|760,400|880,340
 - `target_slot_order`
 - `dynamic_lock_enabled`
 - `dynamic_lock_ena1` (legacy alias)
-- `asteroid_scan_step_px`
+- `asteroid_probe_step_px`
 - `asteroid_dedupe_radius_px`
 - `asteroid_max_candidates`
 - `target_slot_y_search_radius_px`
@@ -95,10 +95,10 @@ asteroid_points=670,430|760,400|880,340
 - `unload_after_target_select_delay_ms`
 - `unload_block_during_laser`
 - `unload_busy_retry_ms`
-- `ore_scan_interval_ms`
+- `ore_transfer_interval_ms`
   - effective minimum in runtime is 15000 ms (faster values are clamped).
-- `ore_scan_no_text_limit`
-- `ore_transfer_max_per_scan`
+- `ore_transfer_no_move_limit`
+- `ore_transfer_max_per_cycle`
 - `min_active_lasers_required`
 - `laser_probe_radius_px`
 - `laser_after_target_select_delay_ms`
@@ -131,14 +131,10 @@ asteroid_points=670,430|760,400|880,340
 - `too_far_region_y1`
 - `too_far_region_x2`
 - `too_far_region_y2`
-- `asteroid_scan_x1`
-- `asteroid_scan_y1`
-- `asteroid_scan_x2`
-- `asteroid_scan_y2`
-- `ore_scan_x1`
-- `ore_scan_y1`
-- `ore_scan_x2`
-- `ore_scan_y2`
+- `asteroid_probe_x1`
+- `asteroid_probe_y1`
+- `asteroid_probe_x2`
+- `asteroid_probe_y2`
 
 ## [colors]
 - `target_present_color`
@@ -190,10 +186,6 @@ When `[layout] layout_enabled=1`, extra keys are read from `layout_ini_path`:
 - `ship_row_y`
 
 ### [regions]
-- `ore_scan_x1`
-- `ore_scan_y1`
-- `ore_scan_x2`
-- `ore_scan_y2`
 - `target_region_x1`
 - `target_region_y1`
 - `target_region_x2`
@@ -204,3 +196,4 @@ When `[layout] layout_enabled=1`, extra keys are read from `layout_ini_path`:
 - `layout_ore_slots`
 - `layout_ore_slot_fallback`
 - `layout_target_slots` (direct-click points for SELECT; same semantics as manual `target_slots`)
+
