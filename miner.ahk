@@ -1210,39 +1210,53 @@ LogEvent(text) {
 
 LoadConfig() {
     global cfg
-    cfg["eve_window_title"] := IniRead("config.ini", "general", "eve_window_title", "EVE Frontier")
-    cfg["main_loop_ms"] := Integer(IniRead("config.ini", "general", "main_loop_ms", 2000))
-    cfg["ui_delay_ms"] := Integer(IniRead("config.ini", "general", "ui_delay_ms", 250))
-    cfg["debug_enabled"] := Integer(IniRead("config.ini", "general", "debug_enabled", 0)) = 1
-    cfg["debug_loop_every_ms"] := Integer(IniRead("config.ini", "general", "debug_loop_every_ms", 5000))
-    cfg["target_slot_order"] := StrLower(Trim(IniRead("config.ini", "general", "target_slot_order", "rtl")))
+
+    cfg["eve_window_title"] := IniRead("config.ini", "main", "eve_window_title", IniRead("config.ini", "general", "eve_window_title", "EVE Frontier"))
+    cfg["main_loop_ms"] := Integer(IniRead("config.ini", "main", "main_loop_ms", IniRead("config.ini", "general", "main_loop_ms", 2000)))
+    cfg["ui_delay_ms"] := Integer(IniRead("config.ini", "main", "ui_delay_ms", IniRead("config.ini", "general", "ui_delay_ms", 250)))
+    cfg["debug_enabled"] := Integer(IniRead("config.ini", "main", "debug_enabled", IniRead("config.ini", "general", "debug_enabled", 0))) = 1
+    cfg["debug_loop_every_ms"] := Integer(IniRead("config.ini", "main", "debug_loop_every_ms", IniRead("config.ini", "general", "debug_loop_every_ms", 5000)))
+    cfg["state_start_delay_ms"] := Integer(IniRead("config.ini", "main", "state_start_delay_ms", IniRead("config.ini", "timers", "state_start_delay_ms", 200)))
+    cfg["click_hover_before_click_ms"] := Integer(IniRead("config.ini", "main", "click_hover_before_click_ms", IniRead("config.ini", "timers", "click_hover_before_click_ms", 200)))
+    cfg["major_action_prep_delay_ms"] := Integer(IniRead("config.ini", "main", "major_action_prep_delay_ms", IniRead("config.ini", "timers", "major_action_prep_delay_ms", 300)))
+
+    cfg["target_slot_order"] := StrLower(Trim(IniRead("config.ini", "module_select", "target_slot_order", IniRead("config.ini", "general", "target_slot_order", "rtl"))))
     if !(cfg["target_slot_order"] = "rtl" || cfg["target_slot_order"] = "ltr") {
         cfg["target_slot_order"] := "rtl"
     }
-    ; Keep backward compatibility for a common typo key: dynamic_lock_ena1.
-    dynRaw := IniRead("config.ini", "general", "dynamic_lock_enabled", "")
+
+    dynRaw := IniRead("config.ini", "main", "dynamic_lock_enabled", "")
     if dynRaw = "" {
-        dynRaw := IniRead("config.ini", "general", "dynamic_lock_ena1", "1")
+        dynRaw := IniRead("config.ini", "general", "dynamic_lock_enabled", "")
+    }
+    if dynRaw = "" {
+        dynRaw := IniRead("config.ini", "deprecated", "dynamic_lock_ena1", IniRead("config.ini", "general", "dynamic_lock_ena1", "1"))
     }
     cfg["dynamic_lock_enabled"] := Integer(dynRaw) = 1
-    cfg["asteroid_probe_step_px"] := Integer(IniRead("config.ini", "general", "asteroid_probe_step_px", 10))
-    cfg["asteroid_dedupe_radius_px"] := Integer(IniRead("config.ini", "general", "asteroid_dedupe_radius_px", 26))
-    cfg["asteroid_max_candidates"] := Integer(IniRead("config.ini", "general", "asteroid_max_candidates", 12))
-    cfg["target_slot_y_search_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_y_search_radius_px", 40))
-    cfg["target_slot_y_search_step_px"] := Integer(IniRead("config.ini", "general", "target_slot_y_search_step_px", 4))
-    cfg["target_slot_x_jitter_px"] := Integer(IniRead("config.ini", "general", "target_slot_x_jitter_px", 10))
-    cfg["target_slot_min_spacing_px"] := Integer(IniRead("config.ini", "general", "target_slot_min_spacing_px", 58))
-    cfg["target_slot_active_probe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_active_probe_radius_px", 5))
-    cfg["target_slot_click_offset_y"] := Integer(IniRead("config.ini", "general", "target_slot_click_offset_y", 30))
-    cfg["target_slot_exists_offset_y"] := Integer(IniRead("config.ini", "general", "target_slot_exists_offset_y", 22))
-    cfg["target_slot_exists_probe_radius_px"] := Integer(IniRead("config.ini", "general", "target_slot_exists_probe_radius_px", 5))
-    cfg["debug_click_marker_ms"] := Integer(IniRead("config.ini", "general", "debug_click_marker_ms", 0))
-    cfg["inventory_focus_click_enabled"] := Integer(IniRead("config.ini", "general", "inventory_focus_click_enabled", 0)) = 1
-    cfg["drag_duration_ms"] := Integer(IniRead("config.ini", "general", "drag_duration_ms", 380))
-    cfg["drag_steps"] := Integer(IniRead("config.ini", "general", "drag_steps", 5))
-    cfg["drag_hover_before_pick_ms"] := Integer(IniRead("config.ini", "general", "drag_hover_before_pick_ms", 180))
-    cfg["drag_hold_before_move_ms"] := Integer(IniRead("config.ini", "general", "drag_hold_before_move_ms", 140))
-    cfg["drag_hold_after_move_ms"] := Integer(IniRead("config.ini", "general", "drag_hold_after_move_ms", 35))
+
+    cfg["asteroid_probe_step_px"] := Integer(IniRead("config.ini", "module_lock", "asteroid_probe_step_px", IniRead("config.ini", "general", "asteroid_probe_step_px", 10)))
+    cfg["asteroid_dedupe_radius_px"] := Integer(IniRead("config.ini", "module_lock", "asteroid_dedupe_radius_px", IniRead("config.ini", "general", "asteroid_dedupe_radius_px", 26)))
+    cfg["asteroid_max_candidates"] := Integer(IniRead("config.ini", "module_lock", "asteroid_max_candidates", IniRead("config.ini", "general", "asteroid_max_candidates", 12)))
+
+    ; Legacy SELECT anchor tuners are no longer used in active flow.
+    cfg["target_slot_y_search_radius_px"] := Integer(IniRead("config.ini", "deprecated", "target_slot_y_search_radius_px", IniRead("config.ini", "general", "target_slot_y_search_radius_px", 40)))
+    cfg["target_slot_y_search_step_px"] := Integer(IniRead("config.ini", "deprecated", "target_slot_y_search_step_px", IniRead("config.ini", "general", "target_slot_y_search_step_px", 4)))
+    cfg["target_slot_x_jitter_px"] := Integer(IniRead("config.ini", "deprecated", "target_slot_x_jitter_px", IniRead("config.ini", "general", "target_slot_x_jitter_px", 10)))
+    cfg["target_slot_click_offset_y"] := Integer(IniRead("config.ini", "deprecated", "target_slot_click_offset_y", IniRead("config.ini", "general", "target_slot_click_offset_y", 30)))
+    cfg["target_slot_exists_offset_y"] := Integer(IniRead("config.ini", "deprecated", "target_slot_exists_offset_y", IniRead("config.ini", "general", "target_slot_exists_offset_y", 22)))
+    cfg["target_slot_exists_probe_radius_px"] := Integer(IniRead("config.ini", "deprecated", "target_slot_exists_probe_radius_px", IniRead("config.ini", "general", "target_slot_exists_probe_radius_px", 5)))
+
+    cfg["target_slot_min_spacing_px"] := Integer(IniRead("config.ini", "module_select", "target_slot_min_spacing_px", IniRead("config.ini", "general", "target_slot_min_spacing_px", 58)))
+    cfg["target_slot_active_probe_radius_px"] := Integer(IniRead("config.ini", "module_select", "target_slot_active_probe_radius_px", IniRead("config.ini", "general", "target_slot_active_probe_radius_px", 5)))
+
+    cfg["debug_click_marker_ms"] := Integer(IniRead("config.ini", "deprecated", "debug_click_marker_ms", IniRead("config.ini", "general", "debug_click_marker_ms", 0)))
+    cfg["inventory_focus_click_enabled"] := Integer(IniRead("config.ini", "deprecated", "inventory_focus_click_enabled", IniRead("config.ini", "general", "inventory_focus_click_enabled", 0))) = 1
+    cfg["drag_duration_ms"] := Integer(IniRead("config.ini", "deprecated", "drag_duration_ms", IniRead("config.ini", "general", "drag_duration_ms", 380)))
+    cfg["drag_steps"] := Integer(IniRead("config.ini", "deprecated", "drag_steps", IniRead("config.ini", "general", "drag_steps", 5)))
+    cfg["drag_hover_before_pick_ms"] := Integer(IniRead("config.ini", "deprecated", "drag_hover_before_pick_ms", IniRead("config.ini", "general", "drag_hover_before_pick_ms", 180)))
+    cfg["drag_hold_before_move_ms"] := Integer(IniRead("config.ini", "deprecated", "drag_hold_before_move_ms", IniRead("config.ini", "general", "drag_hold_before_move_ms", 140)))
+    cfg["drag_hold_after_move_ms"] := Integer(IniRead("config.ini", "deprecated", "drag_hold_after_move_ms", IniRead("config.ini", "general", "drag_hold_after_move_ms", 35)))
+
     cfg["layout_enabled"] := Integer(IniRead("config.ini", "layout", "layout_enabled", 1)) = 1
     cfg["layout_ini_path"] := IniRead("config.ini", "layout", "layout_ini_path", "eve_inventory_calibrate\config.layout.ini")
     cfg["storage_row_index"] := Integer(IniRead("config.ini", "layout", "storage_row_index", 2))
@@ -1250,99 +1264,144 @@ LoadConfig() {
     cfg["ore_slot_indices"] := ParseIntList(cfg["ore_slot_indices_raw"], 1, 99)
 
     cfg["heartbeat_ms"] := Integer(IniRead("config.ini", "timers", "heartbeat_ms", 600000))
-    cfg["lock_timeout_ms"] := Integer(IniRead("config.ini", "timers", "lock_timeout_ms", 30000))
-    lockRetryRaw := IniRead("config.ini", "timers", "lock_retry_delay_ms", "")
+    cfg["lock_timeout_ms"] := Integer(IniRead("config.ini", "module_lock", "lock_timeout_ms", IniRead("config.ini", "timers", "lock_timeout_ms", 30000)))
+    lockRetryRaw := IniRead("config.ini", "module_lock", "lock_retry_delay_ms", "")
     if lockRetryRaw = "" {
-        lockRetryRaw := IniRead("config.ini", "timers", "lock_retry_pause_ms", "500")
+        lockRetryRaw := IniRead("config.ini", "timers", "lock_retry_delay_ms", "")
+    }
+    if lockRetryRaw = "" {
+        lockRetryRaw := IniRead("config.ini", "deprecated", "lock_retry_pause_ms", IniRead("config.ini", "timers", "lock_retry_pause_ms", "500"))
     }
     cfg["lock_retry_delay_ms"] := Integer(lockRetryRaw)
-    cfg["laser_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_retry_delay_ms", 5000))
-    cfg["state_start_delay_ms"] := Integer(IniRead("config.ini", "timers", "state_start_delay_ms", 200))
-    cfg["click_hover_before_click_ms"] := Integer(IniRead("config.ini", "timers", "click_hover_before_click_ms", 200))
-    cfg["major_action_prep_delay_ms"] := Integer(IniRead("config.ini", "timers", "major_action_prep_delay_ms", 300))
-    cfg["laser_allow_partial"] := Integer(IniRead("config.ini", "timers", "laser_allow_partial", 1)) = 1
-    cfg["laser_partial_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_partial_retry_delay_ms", 20000))
-    cfg["laser_fail_deadline_ms"] := Integer(IniRead("config.ini", "timers", "laser_fail_deadline_ms", 20000))
-    cfg["unload_interval_ms"] := Integer(IniRead("config.ini", "timers", "unload_interval_ms", 90000))
-    cfg["unload_interval_min_ms"] := Integer(IniRead("config.ini", "timers", "unload_interval_min_ms", cfg["unload_interval_ms"]))
-    cfg["unload_interval_max_ms"] := Integer(IniRead("config.ini", "timers", "unload_interval_max_ms", cfg["unload_interval_ms"]))
-    cfg["unload_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "unload_after_target_select_delay_ms", 1000))
-    cfg["unload_block_during_laser"] := Integer(IniRead("config.ini", "timers", "unload_block_during_laser", 1)) = 1
-    unloadRetryRaw := IniRead("config.ini", "timers", "unload_retry_delay_ms", "")
+
+    sharedActionRetryRaw := IniRead("config.ini", "timers", "action_retry_delay_ms", "")
+
+    cfg["laser_retry_delay_ms"] := Integer(IniRead("config.ini", "module_laser", "laser_retry_delay_ms", IniRead("config.ini", "timers", "laser_retry_delay_ms", 5000)))
+    cfg["laser_allow_partial"] := Integer(IniRead("config.ini", "module_laser", "laser_allow_partial", IniRead("config.ini", "timers", "laser_allow_partial", 1))) = 1
+    cfg["laser_partial_retry_delay_ms"] := Integer(IniRead("config.ini", "module_laser", "laser_partial_retry_delay_ms", IniRead("config.ini", "timers", "laser_partial_retry_delay_ms", 20000)))
+    cfg["laser_fail_deadline_ms"] := Integer(IniRead("config.ini", "module_laser", "laser_fail_deadline_ms", IniRead("config.ini", "timers", "laser_fail_deadline_ms", 20000)))
+
+    unloadIntervalRaw := IniRead("config.ini", "module_unload", "unload_interval_ms", IniRead("config.ini", "timers", "unload_interval_ms", 90000))
+    cfg["unload_interval_ms"] := Integer(unloadIntervalRaw)
+    cfg["unload_interval_min_ms"] := Integer(IniRead("config.ini", "module_unload", "unload_interval_min_ms", IniRead("config.ini", "timers", "unload_interval_min_ms", cfg["unload_interval_ms"])))
+    cfg["unload_interval_max_ms"] := Integer(IniRead("config.ini", "module_unload", "unload_interval_max_ms", IniRead("config.ini", "timers", "unload_interval_max_ms", cfg["unload_interval_ms"])))
+    cfg["unload_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "module_unload", "unload_after_target_select_delay_ms", IniRead("config.ini", "timers", "unload_after_target_select_delay_ms", 1000)))
+    cfg["unload_block_during_laser"] := Integer(IniRead("config.ini", "module_unload", "unload_block_during_laser", IniRead("config.ini", "timers", "unload_block_during_laser", 1))) = 1
+    unloadRetryRaw := IniRead("config.ini", "module_unload", "unload_retry_delay_ms", IniRead("config.ini", "timers", "unload_retry_delay_ms", ""))
     if unloadRetryRaw = "" {
-        unloadRetryRaw := IniRead("config.ini", "timers", "unload_busy_retry_ms", "1500")
+        unloadRetryRaw := IniRead("config.ini", "deprecated", "unload_busy_retry_ms", IniRead("config.ini", "timers", "unload_busy_retry_ms", "1500"))
     }
     cfg["unload_retry_delay_ms"] := Integer(unloadRetryRaw)
-    oreTransferIntervalRaw := IniRead("config.ini", "timers", "ore_transfer_interval_ms", "")
+
+    oreTransferIntervalRaw := IniRead("config.ini", "module_unload", "ore_transfer_interval_ms", IniRead("config.ini", "timers", "ore_transfer_interval_ms", ""))
     if oreTransferIntervalRaw = "" {
-        oreTransferIntervalRaw := IniRead("config.ini", "timers", "ore_scan_interval_ms", "10000")
+        oreTransferIntervalRaw := IniRead("config.ini", "deprecated", "ore_scan_interval_ms", IniRead("config.ini", "timers", "ore_scan_interval_ms", "10000"))
     }
     cfg["ore_transfer_interval_ms"] := Integer(oreTransferIntervalRaw)
-    oreNoMoveLimitRaw := IniRead("config.ini", "timers", "ore_transfer_no_move_limit", "")
+
+    oreNoMoveLimitRaw := IniRead("config.ini", "module_unload", "ore_transfer_no_move_limit", IniRead("config.ini", "timers", "ore_transfer_no_move_limit", ""))
     if oreNoMoveLimitRaw = "" {
-        oreNoMoveLimitRaw := IniRead("config.ini", "timers", "ore_scan_no_text_limit", "2")
+        oreNoMoveLimitRaw := IniRead("config.ini", "deprecated", "ore_scan_no_text_limit", IniRead("config.ini", "timers", "ore_scan_no_text_limit", "2"))
     }
     cfg["ore_transfer_no_move_limit"] := Integer(oreNoMoveLimitRaw)
-    oreTransferMaxRaw := IniRead("config.ini", "timers", "ore_transfer_max_per_cycle", "")
+
+    oreTransferMaxRaw := IniRead("config.ini", "module_unload", "ore_transfer_max_per_cycle", IniRead("config.ini", "timers", "ore_transfer_max_per_cycle", ""))
     if oreTransferMaxRaw = "" {
-        oreTransferMaxRaw := IniRead("config.ini", "timers", "ore_transfer_max_per_scan", "3")
+        oreTransferMaxRaw := IniRead("config.ini", "deprecated", "ore_transfer_max_per_scan", IniRead("config.ini", "timers", "ore_transfer_max_per_scan", "3"))
     }
     cfg["ore_transfer_max_per_cycle"] := Integer(oreTransferMaxRaw)
-    cfg["ore_transfer_post_delay_ms"] := Integer(IniRead("config.ini", "timers", "ore_transfer_post_delay_ms", 300))
-    cfg["min_active_lasers_required"] := Integer(IniRead("config.ini", "timers", "min_active_lasers_required", 1))
-    cfg["laser_probe_radius_px"] := Integer(IniRead("config.ini", "timers", "laser_probe_radius_px", 3))
-    laserGuardRaw := IniRead("config.ini", "timers", "laser_guard_delay_ms", "")
+
+    cfg["ore_transfer_post_delay_ms"] := Integer(IniRead("config.ini", "module_unload", "ore_transfer_post_delay_ms", IniRead("config.ini", "timers", "ore_transfer_post_delay_ms", 300)))
+    cfg["min_active_lasers_required"] := Integer(IniRead("config.ini", "module_laser", "min_active_lasers_required", IniRead("config.ini", "timers", "min_active_lasers_required", 1)))
+    cfg["laser_probe_radius_px"] := Integer(IniRead("config.ini", "module_laser", "laser_probe_radius_px", IniRead("config.ini", "timers", "laser_probe_radius_px", 3)))
+
+    laserGuardRaw := IniRead("config.ini", "module_laser", "laser_guard_delay_ms", IniRead("config.ini", "timers", "laser_guard_delay_ms", ""))
     if laserGuardRaw = "" {
-        laserGuardRaw := IniRead("config.ini", "timers", "laser_after_target_select_delay_ms", "")
+        laserGuardRaw := IniRead("config.ini", "deprecated", "laser_after_target_select_delay_ms", IniRead("config.ini", "timers", "laser_after_target_select_delay_ms", ""))
     }
     if laserGuardRaw = "" {
-        laserGuardRaw := IniRead("config.ini", "timers", "laser_after_activate_grace_ms", "1000")
+        laserGuardRaw := IniRead("config.ini", "deprecated", "laser_after_activate_grace_ms", IniRead("config.ini", "timers", "laser_after_activate_grace_ms", "1000"))
     }
     cfg["laser_guard_delay_ms"] := Integer(laserGuardRaw)
-    cfg["laser_first_hover_before_click_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_first_hover_before_click_delay_ms", 250))
-    cfg["laser_first_click_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_first_click_after_target_select_delay_ms", 150))
-    cfg["laser_slot_attempts"] := Integer(IniRead("config.ini", "timers", "laser_slot_attempts", 5))
-    cfg["laser_slot_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_slot_retry_delay_ms", 1000))
-    cfg["laser_activate_confirm_ms"] := Integer(IniRead("config.ini", "timers", "laser_activate_confirm_ms", 2200))
+
+    cfg["laser_first_hover_before_click_delay_ms"] := Integer(IniRead("config.ini", "module_laser", "laser_first_hover_before_click_delay_ms", IniRead("config.ini", "timers", "laser_first_hover_before_click_delay_ms", 250)))
+    cfg["laser_first_click_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "module_laser", "laser_first_click_after_target_select_delay_ms", IniRead("config.ini", "timers", "laser_first_click_after_target_select_delay_ms", 150)))
+    cfg["laser_slot_attempts"] := Integer(IniRead("config.ini", "module_laser", "laser_slot_attempts", IniRead("config.ini", "timers", "laser_slot_attempts", 5)))
+    cfg["laser_slot_retry_delay_ms"] := Integer(IniRead("config.ini", "module_laser", "laser_slot_retry_delay_ms", IniRead("config.ini", "timers", "laser_slot_retry_delay_ms", (sharedActionRetryRaw != "" ? sharedActionRetryRaw : 1000))))
+    cfg["laser_activate_confirm_ms"] := Integer(IniRead("config.ini", "module_laser", "laser_activate_confirm_ms", IniRead("config.ini", "timers", "laser_activate_confirm_ms", 2200)))
+
     actionPollRaw := IniRead("config.ini", "timers", "action_poll_interval_ms", "")
     if actionPollRaw = "" {
-        actionPollRaw := IniRead("config.ini", "timers", "laser_activate_poll_ms", "")
+        actionPollRaw := IniRead("config.ini", "deprecated", "laser_activate_poll_ms", IniRead("config.ini", "timers", "laser_activate_poll_ms", ""))
     }
     if actionPollRaw = "" {
-        actionPollRaw := IniRead("config.ini", "timers", "target_select_poll_ms", "120")
+        actionPollRaw := IniRead("config.ini", "deprecated", "target_select_poll_ms", IniRead("config.ini", "timers", "target_select_poll_ms", "120"))
     }
     cfg["action_poll_interval_ms"] := Integer(actionPollRaw)
-    cfg["laser_active_confirm_hits"] := Integer(IniRead("config.ini", "timers", "laser_active_confirm_hits", 2))
-    cfg["laser_recovery_unload_attempts"] := Integer(IniRead("config.ini", "timers", "laser_recovery_unload_attempts", 3))
-    cfg["laser_recovery_unload_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_recovery_unload_delay_ms", 2000))
-    cfg["emergency_lock_timeout_ms"] := Integer(IniRead("config.ini", "timers", "emergency_lock_timeout_ms", 12000))
-    targetSettleRaw := IniRead("config.ini", "timers", "target_settle_delay_ms", "")
+
+    cfg["laser_active_confirm_hits"] := Integer(IniRead("config.ini", "module_laser", "laser_active_confirm_hits", IniRead("config.ini", "timers", "laser_active_confirm_hits", 2)))
+    cfg["laser_recovery_unload_attempts"] := Integer(IniRead("config.ini", "module_laser", "laser_recovery_unload_attempts", IniRead("config.ini", "timers", "laser_recovery_unload_attempts", 3)))
+    cfg["laser_recovery_unload_delay_ms"] := Integer(IniRead("config.ini", "module_laser", "laser_recovery_unload_delay_ms", IniRead("config.ini", "timers", "laser_recovery_unload_delay_ms", 2000)))
+    cfg["emergency_lock_timeout_ms"] := Integer(IniRead("config.ini", "module_recovery", "emergency_lock_timeout_ms", IniRead("config.ini", "timers", "emergency_lock_timeout_ms", 12000)))
+
+    targetSettleRaw := IniRead("config.ini", "module_select", "target_settle_delay_ms", IniRead("config.ini", "timers", "target_settle_delay_ms", ""))
     if targetSettleRaw = "" {
-        targetSettleRaw := IniRead("config.ini", "timers", "target_select_settle_ms", "200")
+        targetSettleRaw := IniRead("config.ini", "timers", "target_click_settle_ms", "120")
     }
     cfg["target_settle_delay_ms"] := Integer(targetSettleRaw)
-    cfg["target_select_slot_attempts"] := Integer(IniRead("config.ini", "timers", "target_select_slot_attempts", 3))
-    targetRetryRaw := IniRead("config.ini", "timers", "target_retry_delay_ms", "")
+
+    targetAttemptsRaw := IniRead("config.ini", "module_select", "target_select_slot_attempts", IniRead("config.ini", "timers", "target_select_slot_attempts", ""))
+    if targetAttemptsRaw = "" {
+        targetAttemptsRaw := IniRead("config.ini", "deprecated", "target_select_attempts", IniRead("config.ini", "timers", "target_select_attempts", "2"))
+    }
+    cfg["target_select_slot_attempts"] := Integer(targetAttemptsRaw)
+
+    targetRetryRaw := IniRead("config.ini", "module_select", "target_retry_delay_ms", IniRead("config.ini", "timers", "target_retry_delay_ms", ""))
     if targetRetryRaw = "" {
-        targetRetryRaw := IniRead("config.ini", "timers", "target_select_retry_delay_ms", "200")
+        targetRetryRaw := IniRead("config.ini", "deprecated", "target_select_retry_ms", IniRead("config.ini", "timers", "target_select_retry_ms", (sharedActionRetryRaw != "" ? sharedActionRetryRaw : "300")))
     }
     cfg["target_retry_delay_ms"] := Integer(targetRetryRaw)
-    targetConfirmRaw := IniRead("config.ini", "timers", "target_confirm_timeout_ms", "")
-    if targetConfirmRaw = "" {
-        targetConfirmRaw := IniRead("config.ini", "timers", "target_select_confirm_ms", "1000")
+
+    targetTimeoutRaw := IniRead("config.ini", "module_select", "target_confirm_timeout_ms", IniRead("config.ini", "timers", "target_confirm_timeout_ms", ""))
+    if targetTimeoutRaw = "" {
+        targetTimeoutRaw := IniRead("config.ini", "deprecated", "target_select_timeout_ms", IniRead("config.ini", "timers", "target_select_timeout_ms", "900"))
     }
-    cfg["target_confirm_timeout_ms"] := Integer(targetConfirmRaw)
-    cfg["target_active_confirm_hits"] := Integer(IniRead("config.ini", "timers", "target_active_confirm_hits", 2))
-    cfg["target_require_state_transition"] := Integer(IniRead("config.ini", "timers", "target_require_state_transition", 1)) = 1
-    cfg["target_active_preselected_extra_hits"] := Integer(IniRead("config.ini", "timers", "target_active_preselected_extra_hits", 2))
-    cfg["post_transfer_refocus_attempts"] := Integer(IniRead("config.ini", "timers", "post_transfer_refocus_attempts", 2))
-    cfg["post_transfer_refocus_delay_ms"] := Integer(IniRead("config.ini", "timers", "post_transfer_refocus_delay_ms", 350))
+    cfg["target_confirm_timeout_ms"] := Integer(targetTimeoutRaw)
+
+    targetHitsRaw := IniRead("config.ini", "module_select", "target_active_confirm_hits", IniRead("config.ini", "timers", "target_active_confirm_hits", ""))
+    if targetHitsRaw = "" {
+        targetHitsRaw := IniRead("config.ini", "deprecated", "target_select_confirm_hits", IniRead("config.ini", "timers", "target_select_confirm_hits", "2"))
+    }
+    cfg["target_active_confirm_hits"] := Integer(targetHitsRaw)
+
+    targetStateTransitionRaw := IniRead("config.ini", "module_select", "target_require_state_transition", IniRead("config.ini", "timers", "target_require_state_transition", ""))
+    if targetStateTransitionRaw = "" {
+        targetStateTransitionRaw := IniRead("config.ini", "deprecated", "target_select_require_state_transition", IniRead("config.ini", "timers", "target_select_require_state_transition", "0"))
+    }
+    cfg["target_require_state_transition"] := Integer(targetStateTransitionRaw) = 1
+
+    targetExtraHitsRaw := IniRead("config.ini", "module_select", "target_active_preselected_extra_hits", IniRead("config.ini", "timers", "target_active_preselected_extra_hits", ""))
+    if targetExtraHitsRaw = "" {
+        targetExtraHitsRaw := IniRead("config.ini", "deprecated", "target_select_preselected_extra_hits", IniRead("config.ini", "timers", "target_select_preselected_extra_hits", "0"))
+    }
+    cfg["target_active_preselected_extra_hits"] := Integer(targetExtraHitsRaw)
+
+    postRefocusAttemptsRaw := IniRead("config.ini", "module_select", "post_transfer_refocus_attempts", IniRead("config.ini", "timers", "post_transfer_refocus_attempts", ""))
+    if postRefocusAttemptsRaw = "" {
+        postRefocusAttemptsRaw := IniRead("config.ini", "deprecated", "post_unload_refocus_attempts", IniRead("config.ini", "timers", "post_unload_refocus_attempts", "2"))
+    }
+    cfg["post_transfer_refocus_attempts"] := Integer(postRefocusAttemptsRaw)
+
+    postRefocusDelayRaw := IniRead("config.ini", "module_select", "post_transfer_refocus_delay_ms", IniRead("config.ini", "timers", "post_transfer_refocus_delay_ms", ""))
+    if postRefocusDelayRaw = "" {
+        postRefocusDelayRaw := IniRead("config.ini", "deprecated", "post_unload_refocus_delay_ms", IniRead("config.ini", "timers", "post_unload_refocus_delay_ms", "250"))
+    }
+    cfg["post_transfer_refocus_delay_ms"] := Integer(postRefocusDelayRaw)
 
     cfg["target_region_x1"] := Integer(IniRead("config.ini", "regions", "target_region_x1", 1360))
     cfg["target_region_y1"] := Integer(IniRead("config.ini", "regions", "target_region_y1", 180))
     cfg["target_region_x2"] := Integer(IniRead("config.ini", "regions", "target_region_x2", 1880))
     cfg["target_region_y2"] := Integer(IniRead("config.ini", "regions", "target_region_y2", 470))
-
     cfg["too_far_region_x1"] := Integer(IniRead("config.ini", "regions", "too_far_region_x1", 480))
     cfg["too_far_region_y1"] := Integer(IniRead("config.ini", "regions", "too_far_region_y1", 70))
     cfg["too_far_region_x2"] := Integer(IniRead("config.ini", "regions", "too_far_region_x2", 1450))
@@ -1351,21 +1410,22 @@ LoadConfig() {
     cfg["asteroid_probe_y1"] := Integer(IniRead("config.ini", "regions", "asteroid_probe_y1", 180))
     cfg["asteroid_probe_x2"] := Integer(IniRead("config.ini", "regions", "asteroid_probe_x2", 1540))
     cfg["asteroid_probe_y2"] := Integer(IniRead("config.ini", "regions", "asteroid_probe_y2", 980))
-    cfg["target_present_color"] := IniRead("config.ini", "colors", "target_present_color", "0x4A4D51")
-    cfg["target_active_orange_color"] := IniRead("config.ini", "colors", "target_active_orange_color", "0xFF4700")
+
+    cfg["target_present_color"] := ParseColorHex(IniRead("config.ini", "colors", "target_present_color", "0x4A4D51"))
+    cfg["target_active_orange_color"] := ParseColorHex(IniRead("config.ini", "colors", "target_active_orange_color", "0xFF4700"))
     cfg["target_active_color_variation"] := Integer(IniRead("config.ini", "colors", "target_active_color_variation", 24))
     cfg["target_active_min_hits"] := Integer(IniRead("config.ini", "colors", "target_active_min_hits", 3))
     cfg["target_active_debug_log"] := Integer(IniRead("config.ini", "colors", "target_active_debug_log", 0)) = 1
-    cfg["target_slot_exists_white_color"] := Integer(IniRead("config.ini", "colors", "target_slot_exists_white_color", "0xFFFFFF"))
+    cfg["target_slot_exists_white_color"] := ParseColorHex(IniRead("config.ini", "colors", "target_slot_exists_white_color", "0xFFFFFF"))
     cfg["target_slot_exists_white_variation"] := Integer(IniRead("config.ini", "colors", "target_slot_exists_white_variation", 22))
-    cfg["laser_active_orange_color"] := IniRead("config.ini", "colors", "laser_active_orange_color", "0xFFB600")
+    cfg["laser_active_orange_color"] := ParseColorHex(IniRead("config.ini", "colors", "laser_active_orange_color", "0xFFB600"))
     cfg["laser_active_min_hits"] := Integer(IniRead("config.ini", "colors", "laser_active_min_hits", 2))
     cfg["laser_debug_log"] := Integer(IniRead("config.ini", "colors", "laser_debug_log", 0)) = 1
-    cfg["asteroid_marker_color"] := Integer(IniRead("config.ini", "colors", "asteroid_marker_color", "0xF0F0F0"))
-    cfg["color_variation"] := Integer(IniRead("config.ini", "colors", "color_variation", 28))
     cfg["laser_color_variation"] := Integer(IniRead("config.ini", "colors", "laser_color_variation", 12))
+    cfg["asteroid_marker_color"] := ParseColorHex(IniRead("config.ini", "colors", "asteroid_marker_color", "0xF0F0F0"))
     cfg["asteroid_marker_variation"] := Integer(IniRead("config.ini", "colors", "asteroid_marker_variation", 35))
     cfg["image_variation"] := Integer(IniRead("config.ini", "colors", "image_variation", 35))
+    cfg["color_variation"] := Integer(IniRead("config.ini", "colors", "color_variation", 28))
 
     cfg["lock_target_menu_x"] := Integer(IniRead("config.ini", "points", "lock_target_menu_x", 706))
     cfg["lock_target_menu_y"] := Integer(IniRead("config.ini", "points", "lock_target_menu_y", 522))
