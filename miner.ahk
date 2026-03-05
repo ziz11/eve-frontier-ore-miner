@@ -95,13 +95,13 @@ MainLoop() {
 
     if now >= nextUnloadTick {
         if cfg["unload_block_during_laser"] && state = STATE_LASER {
-            nextUnloadTick := now + cfg["unload_busy_retry_ms"]
+            nextUnloadTick := now + cfg["unload_retry_delay_ms"]
             if cfg["debug_enabled"] {
-                Debug("unload postponed state=LASER next_in_ms=" cfg["unload_busy_retry_ms"])
+                Debug("unload postponed state=LASER next_in_ms=" cfg["unload_retry_delay_ms"])
             }
         } else if lastTargetSelectedTick > 0 && (now - lastTargetSelectedTick) < cfg["unload_after_target_select_delay_ms"] {
             ; Keep mining flow stable right after target selection.
-            nextUnloadTick := now + cfg["unload_busy_retry_ms"]
+            nextUnloadTick := now + cfg["unload_retry_delay_ms"]
         } else {
             DoUnload()
             lastUnloadTick := now
@@ -158,7 +158,7 @@ DoLockStage() {
             RightClick p[1], p[2]
             Sleep cfg["ui_delay_ms"]
             LeftClick cfg["lock_target_menu_x"], cfg["lock_target_menu_y"]
-            Sleep cfg["lock_retry_pause_ms"]
+            Sleep cfg["lock_retry_delay_ms"]
             if HasAnyTopRightTarget() {
                 return true
             }
@@ -273,7 +273,7 @@ SelectTopRightTarget() {
             Debug("select try slot click=" clickPoint[1] "," clickPoint[2] " attempt=" attempt "/" maxAttempts)
             preActive := SlotHasActiveTarget(clickPoint[1], clickPoint[2])
             LeftClick clickPoint[1], clickPoint[2]
-            Sleep cfg["target_select_settle_ms"]
+            Sleep cfg["target_settle_delay_ms"]
             if WaitForActiveTarget(clickPoint[1], clickPoint[2], preActive) {
                 Debug("select success click=" clickPoint[1] "," clickPoint[2] " attempt=" attempt)
                 lastSelectedSlotX := clickPoint[1]
@@ -282,7 +282,7 @@ SelectTopRightTarget() {
                 return true
             }
             if attempt < maxAttempts {
-                Sleep cfg["target_select_retry_delay_ms"]
+                Sleep cfg["target_retry_delay_ms"]
             }
             attempt += 1
         }
@@ -415,8 +415,8 @@ HasSlotWhiteBelow(anchorX, anchorY) {
 }
 
 WaitForActiveTarget(slotX := 0, slotY := 0, preActive := false) {
-    timeoutMs := cfg["target_select_confirm_ms"]
-    pollMs := cfg["target_select_poll_ms"]
+    timeoutMs := cfg["target_confirm_timeout_ms"]
+    pollMs := cfg["action_poll_interval_ms"]
     requiredHits := cfg["target_active_confirm_hits"]
     hitStreak := 0
     sawFalseAfterClick := !preActive || !cfg["target_require_state_transition"]
@@ -615,10 +615,10 @@ DoLaserStage() {
         laserLostTick := A_TickCount
     }
 
-    if lastTargetSelectedTick > 0 && (now - lastTargetSelectedTick) < cfg["laser_after_target_select_delay_ms"] {
+    if lastTargetSelectedTick > 0 && (now - lastTargetSelectedTick) < cfg["laser_guard_delay_ms"] {
         return
     }
-    if lastLaserActionTick > 0 && (now - lastLaserActionTick) < cfg["laser_after_activate_grace_ms"] {
+    if lastLaserActionTick > 0 && (now - lastLaserActionTick) < cfg["laser_guard_delay_ms"] {
         return
     }
 
@@ -660,7 +660,7 @@ TryRefocusSelectedTargetAfterTransfer() {
     while attempt <= attempts {
         Debug("post-transfer refocus click=" lastSelectedSlotX "," lastSelectedSlotY " attempt=" attempt "/" attempts)
         LeftClick lastSelectedSlotX, lastSelectedSlotY
-        Sleep cfg["target_select_settle_ms"]
+        Sleep cfg["target_settle_delay_ms"]
         if WaitForActiveTarget(lastSelectedSlotX, lastSelectedSlotY) {
             Debug("post-transfer refocus success attempt=" attempt)
             return true
@@ -796,7 +796,7 @@ IsLaserSlotActive(slot) {
 
 WaitForLaserSlotActive(slot) {
     timeoutMs := cfg["laser_activate_confirm_ms"]
-    pollMs := cfg["laser_activate_poll_ms"]
+    pollMs := cfg["action_poll_interval_ms"]
     requiredHits := cfg["laser_active_confirm_hits"]
     streak := 0
     startTick := A_TickCount
@@ -864,7 +864,7 @@ TryEmergencyLock() {
             RightClick p[1], p[2]
             Sleep cfg["ui_delay_ms"]
             LeftClick cfg["lock_target_menu_x"], cfg["lock_target_menu_y"]
-            Sleep cfg["lock_retry_pause_ms"]
+            Sleep cfg["lock_retry_delay_ms"]
             if HasAnyTopRightTarget() {
                 return true
             }
@@ -1251,7 +1251,11 @@ LoadConfig() {
 
     cfg["heartbeat_ms"] := Integer(IniRead("config.ini", "timers", "heartbeat_ms", 600000))
     cfg["lock_timeout_ms"] := Integer(IniRead("config.ini", "timers", "lock_timeout_ms", 30000))
-    cfg["lock_retry_pause_ms"] := Integer(IniRead("config.ini", "timers", "lock_retry_pause_ms", 500))
+    lockRetryRaw := IniRead("config.ini", "timers", "lock_retry_delay_ms", "")
+    if lockRetryRaw = "" {
+        lockRetryRaw := IniRead("config.ini", "timers", "lock_retry_pause_ms", "500")
+    }
+    cfg["lock_retry_delay_ms"] := Integer(lockRetryRaw)
     cfg["laser_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_retry_delay_ms", 5000))
     cfg["state_start_delay_ms"] := Integer(IniRead("config.ini", "timers", "state_start_delay_ms", 200))
     cfg["click_hover_before_click_ms"] := Integer(IniRead("config.ini", "timers", "click_hover_before_click_ms", 200))
@@ -1264,30 +1268,70 @@ LoadConfig() {
     cfg["unload_interval_max_ms"] := Integer(IniRead("config.ini", "timers", "unload_interval_max_ms", cfg["unload_interval_ms"]))
     cfg["unload_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "unload_after_target_select_delay_ms", 1000))
     cfg["unload_block_during_laser"] := Integer(IniRead("config.ini", "timers", "unload_block_during_laser", 1)) = 1
-    cfg["unload_busy_retry_ms"] := Integer(IniRead("config.ini", "timers", "unload_busy_retry_ms", 1500))
-    cfg["ore_transfer_interval_ms"] := Integer(IniRead("config.ini", "timers", "ore_transfer_interval_ms", 10000))
-    cfg["ore_transfer_no_move_limit"] := Integer(IniRead("config.ini", "timers", "ore_transfer_no_move_limit", 2))
-    cfg["ore_transfer_max_per_cycle"] := Integer(IniRead("config.ini", "timers", "ore_transfer_max_per_cycle", 3))
+    unloadRetryRaw := IniRead("config.ini", "timers", "unload_retry_delay_ms", "")
+    if unloadRetryRaw = "" {
+        unloadRetryRaw := IniRead("config.ini", "timers", "unload_busy_retry_ms", "1500")
+    }
+    cfg["unload_retry_delay_ms"] := Integer(unloadRetryRaw)
+    oreTransferIntervalRaw := IniRead("config.ini", "timers", "ore_transfer_interval_ms", "")
+    if oreTransferIntervalRaw = "" {
+        oreTransferIntervalRaw := IniRead("config.ini", "timers", "ore_scan_interval_ms", "10000")
+    }
+    cfg["ore_transfer_interval_ms"] := Integer(oreTransferIntervalRaw)
+    oreNoMoveLimitRaw := IniRead("config.ini", "timers", "ore_transfer_no_move_limit", "")
+    if oreNoMoveLimitRaw = "" {
+        oreNoMoveLimitRaw := IniRead("config.ini", "timers", "ore_scan_no_text_limit", "2")
+    }
+    cfg["ore_transfer_no_move_limit"] := Integer(oreNoMoveLimitRaw)
+    oreTransferMaxRaw := IniRead("config.ini", "timers", "ore_transfer_max_per_cycle", "")
+    if oreTransferMaxRaw = "" {
+        oreTransferMaxRaw := IniRead("config.ini", "timers", "ore_transfer_max_per_scan", "3")
+    }
+    cfg["ore_transfer_max_per_cycle"] := Integer(oreTransferMaxRaw)
     cfg["ore_transfer_post_delay_ms"] := Integer(IniRead("config.ini", "timers", "ore_transfer_post_delay_ms", 300))
     cfg["min_active_lasers_required"] := Integer(IniRead("config.ini", "timers", "min_active_lasers_required", 1))
     cfg["laser_probe_radius_px"] := Integer(IniRead("config.ini", "timers", "laser_probe_radius_px", 3))
-    cfg["laser_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_after_target_select_delay_ms", 1000))
+    laserGuardRaw := IniRead("config.ini", "timers", "laser_guard_delay_ms", "")
+    if laserGuardRaw = "" {
+        laserGuardRaw := IniRead("config.ini", "timers", "laser_after_target_select_delay_ms", "")
+    }
+    if laserGuardRaw = "" {
+        laserGuardRaw := IniRead("config.ini", "timers", "laser_after_activate_grace_ms", "1000")
+    }
+    cfg["laser_guard_delay_ms"] := Integer(laserGuardRaw)
     cfg["laser_first_hover_before_click_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_first_hover_before_click_delay_ms", 250))
     cfg["laser_first_click_after_target_select_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_first_click_after_target_select_delay_ms", 150))
-    cfg["laser_after_activate_grace_ms"] := Integer(IniRead("config.ini", "timers", "laser_after_activate_grace_ms", 1000))
     cfg["laser_slot_attempts"] := Integer(IniRead("config.ini", "timers", "laser_slot_attempts", 5))
     cfg["laser_slot_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_slot_retry_delay_ms", 1000))
     cfg["laser_activate_confirm_ms"] := Integer(IniRead("config.ini", "timers", "laser_activate_confirm_ms", 2200))
-    cfg["laser_activate_poll_ms"] := Integer(IniRead("config.ini", "timers", "laser_activate_poll_ms", 120))
+    actionPollRaw := IniRead("config.ini", "timers", "action_poll_interval_ms", "")
+    if actionPollRaw = "" {
+        actionPollRaw := IniRead("config.ini", "timers", "laser_activate_poll_ms", "")
+    }
+    if actionPollRaw = "" {
+        actionPollRaw := IniRead("config.ini", "timers", "target_select_poll_ms", "120")
+    }
+    cfg["action_poll_interval_ms"] := Integer(actionPollRaw)
     cfg["laser_active_confirm_hits"] := Integer(IniRead("config.ini", "timers", "laser_active_confirm_hits", 2))
     cfg["laser_recovery_unload_attempts"] := Integer(IniRead("config.ini", "timers", "laser_recovery_unload_attempts", 3))
     cfg["laser_recovery_unload_delay_ms"] := Integer(IniRead("config.ini", "timers", "laser_recovery_unload_delay_ms", 2000))
     cfg["emergency_lock_timeout_ms"] := Integer(IniRead("config.ini", "timers", "emergency_lock_timeout_ms", 12000))
-    cfg["target_select_settle_ms"] := Integer(IniRead("config.ini", "timers", "target_select_settle_ms", 200))
+    targetSettleRaw := IniRead("config.ini", "timers", "target_settle_delay_ms", "")
+    if targetSettleRaw = "" {
+        targetSettleRaw := IniRead("config.ini", "timers", "target_select_settle_ms", "200")
+    }
+    cfg["target_settle_delay_ms"] := Integer(targetSettleRaw)
     cfg["target_select_slot_attempts"] := Integer(IniRead("config.ini", "timers", "target_select_slot_attempts", 3))
-    cfg["target_select_retry_delay_ms"] := Integer(IniRead("config.ini", "timers", "target_select_retry_delay_ms", 200))
-    cfg["target_select_confirm_ms"] := Integer(IniRead("config.ini", "timers", "target_select_confirm_ms", 1000))
-    cfg["target_select_poll_ms"] := Integer(IniRead("config.ini", "timers", "target_select_poll_ms", 200))
+    targetRetryRaw := IniRead("config.ini", "timers", "target_retry_delay_ms", "")
+    if targetRetryRaw = "" {
+        targetRetryRaw := IniRead("config.ini", "timers", "target_select_retry_delay_ms", "200")
+    }
+    cfg["target_retry_delay_ms"] := Integer(targetRetryRaw)
+    targetConfirmRaw := IniRead("config.ini", "timers", "target_confirm_timeout_ms", "")
+    if targetConfirmRaw = "" {
+        targetConfirmRaw := IniRead("config.ini", "timers", "target_select_confirm_ms", "1000")
+    }
+    cfg["target_confirm_timeout_ms"] := Integer(targetConfirmRaw)
     cfg["target_active_confirm_hits"] := Integer(IniRead("config.ini", "timers", "target_active_confirm_hits", 2))
     cfg["target_require_state_transition"] := Integer(IniRead("config.ini", "timers", "target_require_state_transition", 1)) = 1
     cfg["target_active_preselected_extra_hits"] := Integer(IniRead("config.ini", "timers", "target_active_preselected_extra_hits", 2))
@@ -1490,5 +1534,3 @@ ParseIntList(raw, minValue, maxValue) {
     }
     return out
 }
-
-
