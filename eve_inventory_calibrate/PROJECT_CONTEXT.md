@@ -83,3 +83,13 @@ Runtime selection:
 3) Run calibrator -> generate `layout.json` + `config.layout.ini`.
 4) Set `layout.storage_row_index` and `layout.ore_slot_indices` in `config.ini`.
 5) Run AHK bot.
+
+
+## Runtime Config Categories
+
+AHK runtime config is organized as:
+- `[main]` for global loop/runtime behavior,
+- `[module_lock]`, `[module_select]`, `[module_laser]`, `[module_unload]`, `[module_recovery]` for module-specific tuning,
+- `[deprecated]` for legacy compatibility keys.
+
+Calibrator output still targets `config.layout.ini`, which is merged by AHK into runtime `cfg` during `LoadConfig()`.
